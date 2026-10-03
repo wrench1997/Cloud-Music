@@ -1,0 +1,10 @@
+MusicFolder = "/vol1/1000/music"
+DataFolder = "/vol1/1000/yungan-music/data"
+Address = "0.0.0.0"
+Port = 4533
+DefaultLanguage = "zh-Hans"
+LogLevel = "info"
+ScanSchedule = "1m"
+SessionTimeout = "24h"
+EnableInsightsCollector = false
+

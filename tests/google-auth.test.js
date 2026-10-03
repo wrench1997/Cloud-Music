@@ -1,0 +1,209 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const { createGoogleAuth, createPkcePair, validateConfig } = require('../electron/google-auth');
+
+const { DRIVE_SCOPES, DRIVE_SCOPE: scope } = require('../src/lib/google-drive');
+const tokenResponse = (token, refreshToken) => ({ access_token: token, ...(refreshToken ? { refresh_token: refreshToken } : {}), expires_in: 3600, scope });
+
+async function fixture(t, fetchImpl, { importCredentials = true } = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yungan-music-test-'));
+  const oauthPath = path.join(directory, 'oauth.json');
+  fs.writeFileSync(oauthPath, JSON.stringify({ installed: { client_id: 'test-client.apps.googleusercontent.com', client_secret: 'public-desktop-secret' } }));
+  const key = crypto.randomBytes(32);
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => {
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+      const ciphertext = Buffer.concat([cipher.update(value), cipher.final()]);
+      return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]);
+    },
+    decryptString: (value) => {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, value.subarray(0, 12));
+      decipher.setAuthTag(value.subarray(12, 28));
+      return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString();
+    },
+  };
+  let onOpen;
+  const deps = { app: { getPath: () => directory }, safeStorage, shell: { openExternal: async (url) => onOpen(new URL(url)) }, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [oauthPath] }) }, getWindow: () => undefined, fetchImpl };
+  const auth = createGoogleAuth(deps);
+  auth.initialize();
+  if (importCredentials) await auth.importConfig();
+  t.after(() => {
+    auth.dispose();
+    assert.equal(directory.startsWith(path.join(os.tmpdir(), 'yungan-music-test-')), true);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const begin = async () => {
+    const opened = new Promise((resolve) => { onOpen = resolve; });
+    const pending = auth.signIn();
+    pending.catch(() => {});
+    const url = await opened;
+    const callback = (state = url.searchParams.get('state')) => `${url.searchParams.get('redirect_uri')}?code=authorization-code&state=${encodeURIComponent(state)}`;
+    return { pending, url, callback };
+  };
+  return { auth, begin, directory, deps };
+}
+
+test('desktop credentials reject web clients and PKCE challenge matches a cryptographic verifier', () => {
+  assert.throws(() => validateConfig({ web: { client_id: 'test.apps.googleusercontent.com' } }), /桌面应用/);
+  assert.throws(() => validateConfig({ installed: { client_id: 'https://untrusted.example' } }), /桌面应用/);
+  const { verifier, challenge } = createPkcePair();
+  assert.ok(verifier.length >= 43);
+  assert.equal(challenge, crypto.createHash('sha256').update(verifier).digest('base64url'));
+});
+
+test('first-use setup opens only official Google destinations and never pretends to sign in without a client', async (t) => {
+  let requests = 0;
+  const { auth, deps } = await fixture(t, async () => { requests += 1; throw new Error('No OAuth request expected'); }, { importCredentials: false });
+  const opened = [];
+  deps.shell.openExternal = async (url) => opened.push(url);
+  await assert.rejects(auth.signIn(), { code: 'GOOGLE_CONFIG_REQUIRED' });
+  assert.equal(auth.status().connected, false);
+  assert.equal(requests, 0);
+  await auth.openSetup();
+  await auth.openSetup('drive');
+  await auth.openSetup('clients');
+  assert.equal(opened.length, 3);
+  for (const url of opened) assert.equal(new URL(url).origin, 'https://console.cloud.google.com');
+  for (const destination of ['https://untrusted.example', '__proto__', 'constructor']) await assert.rejects(auth.openSetup(destination), /无效/);
+  assert.equal(opened.length, 3);
+  await auth.configure(fs.readFileSync(path.join(deps.app.getPath(), 'oauth.json'), 'utf8'));
+  assert.equal(auth.status().configured, true);
+  assert.equal(auth.status().connected, false);
+});
+
+test('invalid pasted configuration and cancelled imports preserve a verified account', async (t) => {
+  const { auth, begin, deps } = await fixture(t, async () => Response.json(tokenResponse('existing-access', 'existing-refresh')));
+  const login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  for (const text of ['not-json', 'null', '{"web":{"client_id":"web.apps.googleusercontent.com"}}']) await assert.rejects(auth.configure(text));
+  assert.equal(await auth.getAccessToken(), 'existing-access');
+  deps.dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+  const result = await auth.importConfig();
+  assert.equal(result.canceled, true);
+  assert.equal(result.connected, true);
+  assert.equal(await auth.getAccessToken(), 'existing-access');
+});
+
+test('system-browser login validates state before exchanging the authorization code and encrypts tokens', async (t) => {
+  let exchanges = 0;
+  let verifier;
+  const { auth, begin, directory } = await fixture(t, async (url, options) => {
+    exchanges += 1;
+    const params = new URLSearchParams(options.body);
+    assert.equal(params.get('grant_type'), 'authorization_code');
+    verifier = params.get('code_verifier');
+    return Response.json(tokenResponse('first-access', 'first-refresh'));
+  });
+  const login = await begin();
+  assert.equal(login.url.origin, 'https://accounts.google.com');
+  assert.equal(login.url.searchParams.get('code_challenge_method'), 'S256');
+  assert.deepEqual(login.url.searchParams.get('scope').split(' '), DRIVE_SCOPES);
+  assert.equal((await fetch(login.callback('wrong-state'))).status, 400);
+  assert.equal(exchanges, 0);
+  assert.equal((await fetch(login.callback())).status, 200);
+  assert.equal(await login.pending, 'first-access');
+  assert.equal(login.url.searchParams.get('code_challenge'), crypto.createHash('sha256').update(verifier).digest('base64url'));
+  const saved = fs.readFileSync(path.join(directory, 'google-account.bin'));
+  assert.equal(saved.includes(Buffer.from('first-refresh')), false);
+  assert.equal(saved.includes(Buffer.from('first-access')), false);
+  assert.equal(auth.status().connected, true);
+});
+
+test('concurrent access-token refresh makes one exchange and restores securely saved login', async (t) => {
+  let refreshes = 0;
+  const { auth, begin, deps } = await fixture(t, async (url, options) => {
+    const params = new URLSearchParams(options.body);
+    if (params.get('grant_type') === 'refresh_token') {
+      refreshes += 1;
+      assert.equal(params.get('refresh_token'), 'first-refresh');
+      const refreshed = tokenResponse('refreshed-access');
+      delete refreshed.scope;
+      return Response.json(refreshed);
+    }
+    return Response.json(tokenResponse('first-access', 'first-refresh'));
+  });
+  const login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  const tokens = await Promise.all(Array.from({ length: 10 }, () => auth.getAccessToken({ force: true })));
+  assert.equal(refreshes, 1);
+  assert.equal(tokens.every((value) => value === 'refreshed-access'), true);
+  const restored = createGoogleAuth(deps);
+  t.after(() => restored.dispose());
+  restored.initialize();
+  assert.equal(await restored.signIn({ interactive: false }), 'refreshed-access');
+});
+
+test('switching accounts never reuses another account refresh token and logout invalidates stream links', async (t) => {
+  let grants = 0;
+  const { auth, begin } = await fixture(t, async (url, options) => {
+    const params = new URLSearchParams(options.body);
+    assert.equal(params.get('grant_type'), 'authorization_code');
+    grants += 1;
+    return Response.json(grants === 1 ? tokenResponse('account-a', 'refresh-a') : tokenResponse('account-b'));
+  });
+  let login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  const streamUrl = await auth.streamUrl('track-id');
+  assert.equal(new URL(streamUrl).searchParams.has('access_token'), false);
+  login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  await assert.rejects(auth.getAccessToken({ force: true }), { code: 'GOOGLE_AUTH_REQUIRED' });
+  await auth.signOut();
+  assert.equal((await fetch(streamUrl)).status, 404);
+  assert.equal(auth.status().connected, false);
+});
+
+test('desktop playback forwards Range and Authorization headers without exposing Google tokens in URLs', async (t) => {
+  let mediaRequests = 0;
+  const { auth, begin } = await fixture(t, async (url, options) => {
+    if (url === 'https://oauth2.googleapis.com/token') return Response.json(tokenResponse('private-access', 'private-refresh'));
+    mediaRequests += 1;
+    assert.equal(new URL(url).searchParams.has('access_token'), false);
+    assert.equal(options.headers.Authorization, 'Bearer private-access');
+    assert.equal(options.headers.Range, 'bytes=10-13');
+    return new Response('ABCD', { status: 206, headers: { 'Content-Range': 'bytes 10-13/100', 'Content-Type': 'audio/mpeg', 'Accept-Ranges': 'bytes' } });
+  });
+  const login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  const url = await auth.streamUrl('track-id');
+  assert.equal(url.includes('private-access'), false);
+  const response = await fetch(url, { headers: { Range: 'bytes=10-13' } });
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('content-range'), 'bytes 10-13/100');
+  assert.equal(await response.text(), 'ABCD');
+  assert.equal(mediaRequests, 1);
+  await assert.rejects(auth.streamUrl('../untrusted'), /无效/);
+});
+
+test('cancelling a pending login prevents a late browser callback from reconnecting the account', async (t) => {
+  let exchanges = 0;
+  const { auth, begin } = await fixture(t, async () => { exchanges += 1; return Response.json(tokenResponse('cancelled', 'cancelled-refresh')); });
+  const login = await begin();
+  await auth.signOut();
+  await assert.rejects(login.pending, { code: 'GOOGLE_AUTH_REQUIRED' });
+  assert.equal((await fetch(login.callback())).status, 400);
+  assert.equal(exchanges, 0);
+  assert.equal(auth.status().connected, false);
+});
+
+test('desktop login rejects granting only one of the two required Drive permissions', async (t) => {
+  for (const partialScope of DRIVE_SCOPES) {
+    const { auth, begin } = await fixture(t, async () => Response.json({ ...tokenResponse('partial', 'partial-refresh'), scope: partialScope }));
+    const login = await begin();
+    assert.equal((await fetch(login.callback())).status, 400);
+    await assert.rejects(login.pending, { code: 'GOOGLE_AUTH_REQUIRED' });
+    assert.equal(auth.status().connected, false);
+    await assert.rejects(auth.streamUrl('song'), { code: 'GOOGLE_AUTH_REQUIRED' });
+  }
+});

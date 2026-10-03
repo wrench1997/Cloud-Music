@@ -1,0 +1,104 @@
+{
+  "name": "electron-nextjs-music",
+  "version": "1.0.0",
+  "description": "Desktop music player built with Electron, Next.js and SQLite",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "electron:dev": "concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run icons && next build && electron-builder",
+    "electron:start": "electron .",
+    "android:sync": "npm run icons && next build && cap sync android",
+    "android:open": "cap open android",
+    "android:build": "npm run icons && next build && cap sync android && cd android && gradlew --init-script mirror-init.gradle assembleDebug",
+    "android:build:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\build-android.ps1",
+    "release": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\package-release.ps1",
+    "icons": "node scripts/generate-icons.cjs",
+    "lint": "next lint",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.4.1",
+    "better-sqlite3": "^11.8.1",
+    "next": "15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
+    "@electron/rebuild": "^3.7.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.10",
+    "postcss": "^8.5.1",
+    "sharp": "0.33.5",
+    "tailwindcss": "^3.4.17",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.music.player",
+    "productName": "Yungan Music",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/lib/google-config.js",
+      "out/**/*",
+      "public/icon.png",
+      "public/icon.ico",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico",
+      "artifactName": "Yungan-Music-Setup-${version}.${ext}",
+      "signAndEditExecutable": true,
+      "fileAssociations": [
+        {
+          "ext": [
+            "mp3",
+            "wav",
+            "flac",
+            "ogg",
+            "m4a",
+            "aac",
+            "wma",
+            "ape",
+            "dsf",
+            "dff",
+            "aiff",
+            "aif",
+            "alac",
+            "opus",
+            "amr",
+            "ac3",
+            "dts",
+            "tta"
+          ],
+          "name": "Audio File",
+          "description": "Audio file",
+          "role": "Viewer"
+        }
+      ]
+    },
+    "nsis": {
+      "shortcutName": "云感音乐"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

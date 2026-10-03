@@ -1,0 +1,9 @@
+{
+  "appId": "com.music.player",
+  "appName": "Yungan Music",
+  "webDir": "out",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
+}

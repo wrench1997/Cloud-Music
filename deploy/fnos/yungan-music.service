@@ -1,0 +1,18 @@
+[Unit]
+Description=Yungan Music (Navidrome)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=Users
+WorkingDirectory=/vol1/1000/yungan-music/data
+ExecStart=/vol1/1000/yungan-music/bin/navidrome --configfile /vol1/1000/yungan-music/navidrome.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

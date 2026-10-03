@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>云感音乐 - 零基础代码学习教程</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.8;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .header p {
+      font-size: 1.2em;
+      opacity: 0.9;
+    }
+
+    .toc {
+      background: #f8f9fa;
+      padding: 30px 40px;
+      border-bottom: 3px solid #667eea;
+    }
+
+    .toc h2 {
+      color: #667eea;
+      margin-bottom: 15px;
+      font-size: 1.5em;
+    }
+
+    .toc ul {
+      list-style: none;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+
+    .toc li {
+      padding: 10px 15px;
+      background: white;
+      border-radius: 8px;
+      border-left: 4px solid #667eea;
+      transition: transform 0.2s;
+      cursor: pointer;
+    }
+
+    .toc li:hover {
+      transform: translateX(5px);
+      background: #667eea;
+      color: white;
+    }
+
+    .toc a {
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+
+    .section {
+      padding: 40px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .section:last-child {
+      border-bottom: none;
+    }
+
+    .section h2 {
+      color: #667eea;
+      font-size: 2em;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 3px solid #667eea;
+    }
+
+    .section h3 {
+      color: #764ba2;
+      font-size: 1.5em;
+      margin: 30px 0 15px;
+    }
+
+    .analogy-box {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: white;
+      padding: 25px;
+      border-radius: 15px;
+      margin: 20px 0;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+
+    .analogy-box h4 {
+      font-size: 1.3em;
+      margin-bottom: 10px;
+    }
+
+    .code-box {
+      background: #2d3748;
+      color: #e2e8f0;
+      padding: 20px;
+      border-radius: 10px;
+      margin: 20px 0;
+      overflow-x: auto;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 0.95em;
+      line-height: 1.6;
+    }
+
+    .code-box .comment {
+      color: #68d391;
+    }
+
+    .code-box .keyword {
+      color: #f687b3;
+    }
+
+    .code-box .string {
+      color: #63b3ed;
+    }
+
+    .code-box .function {
+      color: #fbb6ce;
+    }
+
+    .diagram {
+      background: #f7fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 20px 0;
+      font-family: 'Consolas', 'Monaco', monospace;
+      white-space: pre-wrap;
+      overflow-x: auto;
+    }
+
+    .table-container {
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    th {
+      background: #667eea;
+      color: white;
+      padding: 15px;
+      text-align: left;
+    }
+
+    td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #eee;
+    }
+
+    tr:hover {
+      background: #f7fafc;
+    }
+
+    .highlight {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+      padding: 15px 20px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .tip-box {
+      background: #c6f6d5;
+      border-left: 4px solid #48bb78;
+      padding: 15px 20px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .warning-box {
+      background: #fed7d7;
+      border-left: 4px solid #f56565;
+      padding: 15px 20px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .step-list {
+      counter-reset: step;
+      list-style: none;
+    }
+
+    .step-list li {
+      position: relative;
+      padding-left: 50px;
+      margin: 15px 0;
+    }
+
+    .step-list li::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 35px;
+      height: 35px;
+      background: #667eea;
+      color: white;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 35px;
+      font-weight: bold;
+    }
+
+    .emoji {
+      font-size: 1.5em;
+      margin-right: 5px;
+    }
+
+    .nav-buttons {
+      display: flex;
+      justify-content: space-between;
+      padding: 20px 40px;
+      background: #f8f9fa;
+    }
+
+    .nav-btn {
+      background: #667eea;
+      color: white;
+      padding: 12px 25px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1em;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .nav-btn:hover {
+      background: #764ba2;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+
+    .nav-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .progress-bar {
+      height: 5px;
+      background: #eee;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .back-to-top {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      width: 50px;
+      height: 50px;
+      background: #667eea;
+      color: white;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 50px;
+      font-size: 1.5em;
+      cursor: pointer;
+      opacity: 0;
+      transition: all 0.3s;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+      text-decoration: none;
+    }
+
+    .back-to-top.show {
+      opacity: 1;
+    }
+
+    .back-to-top:hover {
+      background: #764ba2;
+      transform: translateY(-5px);
+    }
+
+    @media (max-width: 768px) {
+      .header h1 {
+        font-size: 1.8em;
+      }
+
+      .section {
+        padding: 20px;
+      }
+
+      .toc ul {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress-bar">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+
+  <div class="container">
+    <div class="header">
+      <h1>🎵 云感音乐</h1>
+      <p>零基础代码学习教程</p>
+      <p style="margin-top: 10px; opacity: 0.8;">📖 专为代码小白设计，从零开始理解这个项目</p>
+    </div>
+
+    <div class="toc">
+      <h2>📑 目录导航</h2>
+      <ul>
+        <li><a href="#section1">1️⃣ 这是什么？</a></li>
+        <li><a href="#section2">2️⃣ 核心概念</a></li>
+        <li><a href="#section3">3️⃣ 代码解读</a></li>
+        <li><a href="#section4">4️⃣ IPC 通信</a></li>
+        <li><a href="#section5">5️⃣ 界面绘制</a></li>
+        <li><a href="#section6">6️⃣ 学习路线</a></li>
+        <li><a href="#section7">7️⃣ 调试技巧</a></li>
+        <li><a href="#section8">8️⃣ 常见问题</a></li>
+      </ul>
+    </div>
+
+    <div class="section" id="section1">
+      <h2><span class="emoji">🎯</span>第一部分：先理解"这是什么"</h2>
+      
+      <h3>1.1 这个项目是什么？</h3>
+      <p>想象你有一个<strong>音乐播放器 APP</strong>，就像 QQ 音乐、网易云音乐，但有一个重要区别：</p>
+
+      <div class="diagram">┌─────────────────┐         ┌─────────────────┐
+│    QQ 音乐       │         │    云感音乐      │
+├─────────────────┤         ├─────────────────┤
+│ 📡 在线听歌     │         │ 💾 播放本地文件  │
+│ 💰 需要会员     │         │ ✅ 完全免费      │
+│ 🌐 要联网       │         │ 📴 不需要网络    │
+└─────────────────┘         └─────────────────┘</div>
+
+      <div class="highlight">
+        <strong>💡 简单说：</strong>云感音乐 = 播放你自己电脑/手机里的 MP3 文件
+      </div>
+
+      <h3>1.2 为什么需要代码？</h3>
+      <p>电脑不懂人话，它需要<strong>指令</strong>才能工作：</p>
+
+      <div class="diagram">你想："播放那首歌"
+      ↓
+代码翻译成电脑懂的：打开文件 → 读取数据 → 转换成声音 → 从喇叭播放
+      ↓
+电脑执行</div>
+
+      <div class="analogy-box">
+        <h4>🎯 代码 = 给电脑写的"操作说明书"</h4>
+        <p>就像菜谱告诉厨师怎么做菜，代码告诉电脑怎么做事。</p>
+      </div>
+    </div>
+
+    <div class="section" id="section2">
+      <h2><span class="emoji">🧱</span>第二部分：核心概念（用生活类比）</h2>
+
+      <h3>2.1 前端 vs 后端</h3>
+      <p>想象一家<strong>餐厅</strong>：</p>
+
+      <div class="diagram">┌─────────────────────────────────────────┐
+│          🍽️  餐厅（音乐播放器）          │
+│                                         │
+│  ┌─────────────┐      ┌─────────────┐  │
+│  │   用餐区     │ ←→  │    厨房      │  │
+│  │   (前端)    │      │   (后端)    │  │
+│  │             │      │             │  │
+│  │ • 菜单      │      │ • 厨师      │  │
+│  │ • 餐桌      │      │ • 食材      │  │
+│  │ • 你看到的样子│    │ • 实际做菜   │  │
+│  └─────────────┘      └─────────────┘  │
+└─────────────────────────────────────────┘</div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>餐厅</th>
+              <th>音乐播放器</th>
+              <th>作用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>用餐区</td>
+              <td>前端界面</td>
+              <td>给你看菜单、点菜</td>
+            </tr>
+            <tr>
+              <td>服务员</td>
+              <td>IPC 通信</td>
+              <td>把你的需求告诉厨房</td>
+            </tr>
+            <tr>
+              <td>厨房</td>
+              <td>后端程序</td>
+              <td>实际处理文件、播放音乐</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2.2 数据库是什么？</h3>
+      <div class="analogy-box">
+        <h4>📊 数据库 = 一个 Excel 表格</h4>
+      </div>
+
+      <div class="diagram">songs 表（歌曲清单）
+┌────┬──────────┬────────┬──────────┬──────────────────┐
+│ id │  title   │ artist │  album   │    filePath      │
+├────┼──────────┼────────┼──────────┼──────────────────┤
+│ 1  │ 晴天     │ 周杰伦  │ 叶惠美   │ D:\Music\1.mp3   │
+│ 2  │ 七里香   │ 周杰伦  │ 七里香   │ D:\Music\2.mp3   │
+│ 3  │ 告白气球 │ 周杰伦  │ 床边故事 │ D:\Music\3.mp3   │
+└────┴──────────┴────────┴──────────┴──────────────────┘</div>
+
+      <div class="code-box"><span class="keyword">//</span> 就像对数据库说："把所有歌曲给我"
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> songs;
+
+<span class="keyword">//</span> 返回结果：
+[
+  { id: <span class="string">1</span>, title: <span class="string">'晴天'</span>, artist: <span class="string">'周杰伦'</span>, ... },
+  { id: <span class="string">2</span>, title: <span class="string">'七里香'</span>, artist: <span class="string">'周杰伦'</span>, ... },
+  ...
+]</div>
+
+      <h3>2.3 IPC 通信是什么？</h3>
+      <div class="analogy-box">
+        <h4>👨‍🍳 IPC = 前台服务员</h4>
+      </div>
+
+      <div class="diagram">前端（界面）       IPC（服务员）      后端（厨房）
+   │                    │                   │
+   │ "我要播放这首歌"   │                   │
+   │ ─────────────────> │                   │
+   │                    │ "播放 D:\x.mp3"   │
+   │                    │ ────────────────> │
+   │                    │                   │ 🔊 实际播放
+   │                    │ "好的，开始了"    │
+   │ "开始播放了！"     │ <──────────────── │
+   │ <───────────────── │                   │</div>
+
+      <div class="warning-box">
+        <strong>⚠️ 为什么需要服务员？</strong><br>
+        前端（界面）<strong>不能直接</strong>访问电脑文件（不安全）<br>
+        需要通过后端（有权限）来操作<br>
+        IPC 就是它们之间的"传话员"
+      </div>
+    </div>
+
+    <div class="section" id="section3">
+      <h2><span class="emoji">💻</span>第三部分：代码逐行解读</h2>
+
+      <h3>3.1 先看最简单的 - 图标组件</h3>
+      <p>打开 <code>src/pages/index.js</code>，找到第 5-11 行：</p>
+
+      <div class="code-box"><span class="keyword">function</span> <span class="function">MusicIcon</span>({ className = <span class="string">'h-6 w-6'</span> }) {
+  <span class="keyword">return</span> (
+    &lt;svg className={className} viewBox=<span class="string">"0 0 24 24"</span> fill=<span class="string">"currentColor"</span>&gt;
+      &lt;path d=<span class="string">"M19 3.3v12.05..."</span> /&gt;
+    &lt;/svg&gt;
+  );
+}</div>
+
+      <div class="tip-box">
+        <strong>👆 翻译成人话：</strong><br>
+        • 定义一个叫 <code>MusicIcon</code> 的函数（组件）<br>
+        • 这个函数返回一个 SVG 图标（就像画图的线条）<br>
+        • <code>className</code> 控制图标的大小
+      </div>
+
+      <h3>3.2 状态管理 - 让界面"记住"东西</h3>
+
+      <div class="code-box"><span class="keyword">const</span> [songs, setSongs] = <span class="function">useState</span>([]);
+<span class="keyword">const</span> [currentSong, setCurrentSong] = <span class="function">useState</span>(<span class="keyword">null</span>);
+<span class="keyword">const</span> [isPlaying, setIsPlaying] = <span class="function">useState</span>(<span class="keyword">false</span>);
+<span class="keyword">const</span> [volume, setVolume] = <span class="function">useState</span>(<span class="string">0.7</span>);
+<span class="keyword">const</span> [progress, setProgress] = <span class="function">useState</span>(<span class="string">0</span>);
+<span class="keyword">const</span> [duration, setDuration] = <span class="function">useState</span>(<span class="string">0</span>);</div>
+
+      <div class="analogy-box">
+        <h4>📒 想象你有 6 个记事本：</h4>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>记事本</th>
+                <th>记录什么</th>
+                <th>初始值</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>songs</td>
+                <td>所有歌曲列表</td>
+                <td>空列表 []</td>
+              </tr>
+              <tr>
+                <td>currentSong</td>
+                <td>当前播放的歌</td>
+                <td>无 (null)</td>
+              </tr>
+              <tr>
+                <td>isPlaying</td>
+                <td>是否在播放</td>
+                <td>否 (false)</td>
+              </tr>
+              <tr>
+                <td>volume</td>
+                <td>音量大小</td>
+                <td>0.7 (70%)</td>
+              </tr>
+              <tr>
+                <td>progress</td>
+                <td>播放进度</td>
+                <td>0 秒</td>
+              </tr>
+              <tr>
+                <td>duration</td>
+                <td>歌曲总长</td>
+                <td>0 秒</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="highlight">
+        <strong>✨ 神奇的地方：</strong><br>
+        状态改变 → 界面自动刷新<br>
+        不需要手动说"请刷新界面"，React 会自动帮你做！
+      </div>
+
+      <h3>3.3 加载歌曲 - 异步操作</h3>
+
+      <div class="code-box"><span class="keyword">const</span> <span class="function">loadSongs</span> = <span class="keyword">async</span> () => {
+  <span class="keyword">try</span> {
+    <span class="keyword">if</span> (!window.electronAPI) {
+      <span class="keyword">return</span>;  <span class="comment">// 没有服务员，不点菜</span>
+    }
+    <span class="keyword">const</span> allSongs = <span class="keyword">await</span> window.electronAPI.<span class="function">getAllSongs</span>();
+    <span class="comment">// 👆 等待服务员把菜端上来</span>
+    <span class="function">setSongs</span>(allSongs);
+    <span class="comment">// 👆 把菜摆到桌上（界面显示）</span>
+  } <span class="keyword">catch</span> (error) {
+    console.<span class="function">error</span>(<span class="string">'加载歌曲失败:'</span>, error);
+    <span class="keyword">return</span> [];
+  }
+};</div>
+
+      <h3>3.4 播放歌曲 - 核心功能</h3>
+
+      <div class="diagram">用户点击一首歌
+    ↓
+playSong(被点击的歌)
+    ↓
+问：这首歌是不是已经在播放了？
+    ↓
+是 → togglePlay() 切换播放/暂停
+否 → 设置为当前歌曲，开始播放</div>
+
+      <h3>3.5 下一首 - 循环播放</h3>
+
+      <div class="code-box"><span class="keyword">const</span> nextIndex = (currentIndex + <span class="string">1</span>) % songs.length;
+<span class="comment">// 👆 这是"循环"的关键！</span></div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>当前索引</th>
+              <th>+1</th>
+              <th>% 5（取余数）</th>
+              <th>下一首索引</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0</td>
+              <td>1</td>
+              <td>1</td>
+              <td>1</td>
+            </tr>
+            <tr>
+              <td>1</td>
+              <td>2</td>
+              <td>2</td>
+              <td>2</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>3</td>
+              <td>3</td>
+              <td>3</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>4</td>
+              <td>4</td>
+              <td>4</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>5</td>
+              <td><strong>0</strong></td>
+              <td><strong>0 ← 回到第一首！</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="tip-box">
+        <strong>💡 <code>%</code> 是什么？</strong><br>
+        <code>%</code> = 取余数<br>
+        <code>5 % 5 = 0</code>（5 除以 5 余 0）<br>
+        这样就实现了<strong>循环播放</strong>
+      </div>
+    </div>
+
+    <div class="section" id="section4">
+      <h2><span class="emoji">🔌</span>第四部分：IPC 通信详解</h2>
+
+      <h3>4.1 完整的通信流程</h3>
+
+      <div class="diagram">┌──────────────────────────────────────────────────────┐
+│  1️⃣ 前端发起请求                                      │
+│  src/pages/index.js                                  │
+│  const allSongs = await window.electronAPI.          │
+│                    getAllSongs();                    │
+└──────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────┐
+│  2️⃣ 桥接层转发                                        │
+│  electron/preload.js                                 │
+│  getAllSongs: () =&gt; ipcRenderer.                     │
+│                    invoke('get-all-songs')           │
+└──────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────┐
+│  3️⃣ 后端处理                                          │
+│  electron/main.js                                    │
+│  ipcMain.handle('get-all-songs', () =&gt; {           │
+│    const stmt = db.prepare(                          │
+│      'SELECT * FROM songs');                         │
+│    return stmt.all();                                │
+│  });                                                 │
+└──────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────┐
+│  4️⃣ 数据库返回                                        │
+│  SELECT * FROM songs;                                │
+│  -- 返回所有歌曲数据                                 │
+└──────────────────────────────────────────────────────┘
+                          ↓
+                    原路返回给前端</div>
+
+      <h3>4.2 为什么这么复杂？</h3>
+
+      <div class="warning-box">
+        <strong>🔐 安全问题！</strong><br><br>
+        ❌ 错误做法（不安全）：<br>
+        前端直接访问文件系统<br>
+        → 恶意网页可以读取你的所有文件！<br><br>
+        ✅ 正确做法（安全）：<br>
+        前端 → IPC → 后端 → 文件系统<br>
+        → 后端可以检查、限制前端的请求
+      </div>
+
+      <div class="analogy-box">
+        <h4>就像：</h4>
+        <p>❌ 让顾客直接进厨房拿菜</p>
+        <p>✅ 顾客通过服务员点菜，厨房做好再端出来</p>
+      </div>
+    </div>
+
+    <div class="section" id="section5">
+      <h2><span class="emoji">🎨</span>第五部分：界面是怎么画出来的？</h2>
+
+      <h3>5.1 JSX - HTML + JavaScript</h3>
+
+      <div class="code-box"><span class="keyword">return</span> (
+  &lt;<span class="keyword">div</span> className=<span class="string">"app-shell"</span>&gt;
+    &lt;<span class="keyword">header</span>&gt;
+      &lt;<span class="keyword">h1</span>&gt;云感音乐&lt;/<span class="keyword">h1</span>&gt;
+      &lt;<span class="keyword">button</span> onClick={selectMusicFolder}&gt;
+        添加音乐
+      &lt;/<span class="keyword">button</span>&gt;
+    &lt;/<span class="keyword">header</span>&gt;
+  &lt;/<span class="keyword">div</span>&gt;
+);</div>
+
+      <div class="tip-box">
+        <strong>👆 这其实很像 HTML：</strong><br>
+        JSX = JavaScript + HTML 的混合体<br>
+        • <code>className</code> = HTML 的 <code>class</code>（因为 <code>class</code> 是 JS 关键字）<br>
+        • <code>{}</code> = 可以插入 JavaScript 变量<br>
+        • <code>onClick={}</code> = 点击时执行的函数
+      </div>
+
+      <h3>5.2 TailwindCSS - 写样式的新方式</h3>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>传统 CSS</th>
+              <th>TailwindCSS</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <div class="code-box" style="padding: 10px; font-size: 0.85em;">
+.button {
+  background: blue;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 5px;
+}
+                </div>
+              </td>
+              <td>
+                <div class="code-box" style="padding: 10px; font-size: 0.85em;">
+&lt;button className=
+  "bg-blue-500 
+   text-white 
+   px-5 py-2 
+   rounded"&gt;
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="highlight">
+        <strong>💡 TailwindCSS 的好处：</strong><br>
+        不需要想"类名"，直接用"单词"写样式！
+      </div>
+    </div>
+
+    <div class="section" id="section6">
+      <h2><span class="emoji">📚</span>第六部分：学习路线建议</h2>
+
+      <h3>🎯 第一阶段：看懂代码（1-2 周）</h3>
+      
+      <ol class="step-list">
+        <li>打开 <code>src/pages/index.js</code></li>
+        <li>每天读 10-20 行代码</li>
+        <li>用注释写下每行的作用（就像我上面做的）</li>
+        <li>不懂的术语查一查</li>
+      </ol>
+
+      <div class="tip-box">
+        <strong>📖 推荐资源（都是中文！）：</strong><br>
+        • <a href="https://zh-hans.react.dev/learn" target="_blank">React 官方教程</a><br>
+        • <a href="https://zh.javascript.info/" target="_blank">JavaScript 教程</a>
+      </div>
+
+      <h3>🎯 第二阶段：修改代码（2-4 周）</h3>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>练习</th>
+              <th>改哪里</th>
+              <th>效果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>改文字</td>
+              <td><code>&lt;h1&gt;云感音乐&lt;/h1&gt;</code></td>
+              <td>标题变成你的文字</td>
+            </tr>
+            <tr>
+              <td>改颜色</td>
+              <td><code>text-red-200/70</code> → <code>text-blue-200/70</code></td>
+              <td>红色变蓝色</td>
+            </tr>
+            <tr>
+              <td>改功能</td>
+              <td><code>playNext()</code> 函数</td>
+              <td>下一首变上一首</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>🎯 第三阶段：添加功能（1-2 月）</h3>
+
+      <div class="diagram">💡 可以尝试的功能：
+
+1️⃣ 随机播放按钮
+   • 新状态：isShuffle
+   • 新函数：playRandom()
+   • 新按钮：&lt;button&gt;随机&lt;/button&gt;
+
+2️⃣ 收藏功能
+   • 新数据库表：favorites
+   • 新 IPC 接口：addFavorite
+   • 新 UI：❤️ 心形按钮
+
+3️⃣ 歌词显示
+   • 读取 .lrc 文件
+   • 解析歌词时间
+   • 同步高亮显示</div>
+    </div>
+
+    <div class="section" id="section7">
+      <h2><span class="emoji">🛠️</span>第七部分：调试技巧</h2>
+
+      <h3>7.1 前端调试</h3>
+
+      <div class="highlight">
+        <strong>🔧 打开开发者工具：</strong><br>
+        Electron 窗口按 <code>F12</code><br>
+        和浏览器一样！
+      </div>
+
+      <div class="code-box"><span class="comment">//</span> 在代码里加"观察点"
+console.<span class="function">log</span>(<span class="string">'当前歌曲:'</span>, currentSong);
+<span class="comment">//</span> 然后在 Console 标签查看输出</div>
+
+      <h3>7.2 后端调试</h3>
+
+      <div class="code-box">ipcMain.<span class="function">handle</span>(<span class="string">'get-all-songs'</span>, () => {
+  console.<span class="function">log</span>(<span class="string">'收到获取歌曲请求'</span>);
+  <span class="keyword">const</span> stmt = db.<span class="function">prepare</span>(<span class="string">'SELECT * FROM songs'</span>);
+  <span class="keyword">const</span> songs = stmt.<span class="function">all</span>();
+  console.<span class="function">log</span>(<span class="string">'返回歌曲数量:'</span>, songs.length);
+  <span class="keyword">return</span> songs;
+});</div>
+
+      <div class="tip-box">
+        <strong>👀 查看输出：</strong><br>
+        运行 <code>npm run electron:dev</code><br>
+        看终端/命令提示符窗口的输出
+      </div>
+
+      <h3>7.3 数据库查看</h3>
+
+      <div class="highlight">
+        <strong>🗄️ Windows 推荐工具：</strong><br>
+        <a href="https://sqlitebrowser.org/" target="_blank">DB Browser for SQLite</a> - 免费<br>
+        打开 <code>music.db</code> 文件<br>
+        可以像 Excel 一样查看数据
+      </div>
+    </div>
+
+    <div class="section" id="section8">
+      <h2><span class="emoji">❓</span>第八部分：常见问题解答</h2>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%;">问题</th>
+              <th>答案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Q1:</strong> 为什么代码里有很多 <code>{}</code> 和 <code>()</code>？</td>
+              <td>
+                <code>{}</code> = 在 JSX 里插入 JavaScript 变量<br>
+                <code>()</code> = 函数调用或分组
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Q2:</strong> <code>=&gt;</code> 是什么？</td>
+              <td>
+                箭头函数，是函数的简写<br>
+                <code>() => {}</code> = 没有名字的函数
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Q3:</strong> <code>...</code> 三个点是什么？</td>
+              <td>
+                展开运算符<br>
+                把数组"展开"成单个元素
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Q4:</strong> 怎么知道某个函数什么时候被调用？</td>
+              <td>
+                1. 搜索这个函数名<br>
+                2. 看哪里调用了它<br>
+                3. 或者加 <code>console.log</code> 看输出
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Q5:</strong> 代码改了没效果？</td>
+              <td>
+                <input type="checkbox"> 保存文件了吗？<br>
+                <input type="checkbox"> 重启开发服务器了吗？<br>
+                <input type="checkbox"> 浏览器/窗口刷新了吗？<br>
+                <input type="checkbox"> 改的是正确的文件吗？
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+      <h2 style="color: white; border-bottom-color: white;">🎯 总结</h2>
+      
+      <div class="table-container">
+        <table style="background: rgba(255,255,255,0.1);">
+          <thead>
+            <tr style="background: rgba(255,255,255,0.2);">
+              <th>概念</th>
+              <th>生活类比</th>
+              <th>作用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>前端</td>
+              <td>餐厅用餐区</td>
+              <td>显示界面，接收用户操作</td>
+            </tr>
+            <tr>
+              <td>后端</td>
+              <td>餐厅厨房</td>
+              <td>处理文件、数据库</td>
+            </tr>
+            <tr>
+              <td>IPC</td>
+              <td>服务员</td>
+              <td>前后端通信</td>
+            </tr>
+            <tr>
+              <td>数据库</td>
+              <td>Excel 表格</td>
+              <td>存储歌曲信息</td>
+            </tr>
+            <tr>
+              <td>状态</td>
+              <td>记事本</td>
+              <td>记住当前情况</td>
+            </tr>
+            <tr>
+              <td>组件</td>
+              <td>乐高积木</td>
+              <td>可复用的界面块</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="margin-top: 30px; text-align: center; padding: 20px;">
+        <h3 style="color: white; margin-bottom: 20px;">下一步行动</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+          <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+            <div style="font-size: 2em;">1️⃣</div>
+            <p>用 VS Code 打开这个项目</p>
+          </div>
+          <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+            <div style="font-size: 2em;">2️⃣</div>
+            <p>一行一行看 <code>src/pages/index.js</code></p>
+          </div>
+          <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+            <div style="font-size: 2em;">3️⃣</div>
+            <p>试着改几个文字、颜色</p>
+          </div>
+          <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+            <div style="font-size: 2em;">4️⃣</div>
+            <p>遇到不懂的随时问！</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 30px; padding: 20px; background: rgba(255,255,255,0.2); border-radius: 10px; text-align: center;">
+        <p style="font-size: 1.3em;">💡 <strong>记住：每个程序员都是从第一行代码开始的。</strong></p>
+        <p style="font-size: 1.3em;">不懂就问，多动手试，你一定能学会！</p>
+      </div>
+    </div>
+
+    <div class="nav-buttons">
+      <a href="#section1" class="nav-btn">⬆️ 回到顶部</a>
+      <a href="代码架构.md" class="nav-btn">📄 查看架构文档</a>
+    </div>
+  </div>
+
+  <a href="#" class="back-to-top" id="backToTop">↑</a>
+
+  <script>
+    // 进度条
+    window.onscroll = function() {
+      const winScroll = document.body.scrollTop || document.documentElement.scrollTop;
+      const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+      const scrolled = (winScroll / height) * 100;
+      document.getElementById("progressFill").style.width = scrolled + "%";
+
+      // 回到顶部按钮
+      const backToTop = document.getElementById("backToTop");
+      if (document.body.scrollTop > 300 || document.documentElement.scrollTop > 300) {
+        backToTop.classList.add("show");
+      } else {
+        backToTop.classList.remove("show");
+      }
+    };
+
+    // 平滑滚动
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({
+            behavior: 'smooth'
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

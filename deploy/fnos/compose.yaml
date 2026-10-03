@@ -1,0 +1,17 @@
+services:
+  navidrome:
+    image: ghcr.io/navidrome/navidrome:latest
+    container_name: yungan-music
+    user: "1000:1001"
+    restart: unless-stopped
+    ports:
+      - "4533:4533"
+    environment:
+      ND_LOGLEVEL: info
+      ND_DEFAULTLANGUAGE: zh-Hans
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_SCANSCHEDULE: "1m"
+      ND_SESSIONTIMEOUT: "24h"
+    volumes:
+      - /vol1/1000/yungan-music/data:/data
+      - /vol1/1000/music:/music:ro
