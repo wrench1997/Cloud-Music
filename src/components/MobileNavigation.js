@@ -6,6 +6,7 @@ const paths = {
   close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z',
   library: 'M3 5h7l2 2h9v13H3zm2 2v11h14V9h-7l-2-2z',
   download: 'M11 3h2v10l3-3 1.4 1.4L12 17l-5.4-5.6L8 10l3 3zM4 18h2v2h12v-2h2v4H4z',
+  discover: 'M10 3a7 7 0 1 0 4.9 12l5.7 5.7 1.4-1.4-5.7-5.7A7 7 0 0 0 10 3zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z',
   settings: 'M12 2l2.2 3.2 3.8-.3.3 3.8L22 11v2l-3.7 2.3-.3 3.8-3.8-.3L12 22l-2.2-3.2-3.8.3-.3-3.8L2 13v-2l3.7-2.3.3-3.8 3.8.3zm0 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
 };
 
@@ -13,7 +14,7 @@ function MenuIcon({ name }) {
   return <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
 
-export default function MobileNavigation({ open, onOpen, onClose, active, onLibrary, onPlaylists, onSettings, email, hasUpdate, standalone }) {
+export default function MobileNavigation({ open, onOpen, onClose, active, onLibrary, onPlaylists, onDiscover, onSettings, email, hasUpdate, standalone }) {
   const panel = useRef(null);
   const trigger = useRef(null);
   useEffect(() => {
@@ -44,6 +45,7 @@ export default function MobileNavigation({ open, onOpen, onClose, active, onLibr
         <div className={styles.account}><span className={styles.avatar}>{email ? email[0].toUpperCase() : '♪'}</span><div><b>{email ? 'Google Drive 已连接' : '欢迎使用云感音乐'}</b><small>{email || '歌单导入无需登录'}</small></div></div>
         <nav aria-label="应用功能">
           <button aria-current={active === 'library' ? 'page' : undefined} onClick={onLibrary}><MenuIcon name="library" /><span><b>云端曲库</b><small>我的音乐和收藏</small></span></button>
+          <button aria-current={active === 'discover' ? 'page' : undefined} onClick={onDiscover}><MenuIcon name="discover" /><span><b>发现音乐</b><small>按收藏找歌 · 选音源下载</small></span></button>
           <button aria-current={active === 'playlists' ? 'page' : undefined} onClick={onPlaylists}><MenuIcon name="download" /><span><b>歌单下载</b><small>Spotify / YouTube Music</small></span></button>
           <button aria-current={active === 'settings' ? 'page' : undefined} onClick={onSettings}><MenuIcon name="settings" /><span><b>设置</b><small>账号 · 应用更新</small></span>{hasUpdate && <em>有更新</em>}</button>
         </nav>

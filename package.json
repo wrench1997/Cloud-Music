@@ -1,6 +1,6 @@
 {
   "name": "electron-nextjs-music",
-  "version": "1.2.3",
+  "version": "1.2.5",
   "description": "Desktop music player built with Electron, Next.js and SQLite",
   "main": "electron/main.js",
   "scripts": {

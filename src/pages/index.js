@@ -9,6 +9,9 @@ import AppSettings from '../components/AppSettings';
 import MobileNavigation from '../components/MobileNavigation';
 import { useAppUpdates } from '../components/AppUpdates';
 import SongArtwork from '../components/SongArtwork';
+import SeekBar from '../components/SeekBar';
+import PlaybackModeControl from '../components/PlaybackModeControl';
+import { playbackMode, nativePlaybackMode, nextTrackIndex, shuffleBag, seekPosition } from '../lib/playback-policy';
 import { createGoogleDriveApi, isMusicFile, MUSIC_ACCEPT, ROOT_FOLDER, normalizeState } from '../lib/google-drive';
 import { locationKey, normalizeFolderPath, openVerifiedGoogleLibrary } from '../lib/google-library';
 import { createGoogleLoginRecovery, isTransientError } from '../lib/google-login-recovery';
@@ -32,6 +35,7 @@ const icons = {
   upload: 'M11 15V7L8 10 6.6 8.6 12 3.2l5.4 5.4L16 10l-3-3v8h-2ZM4 16h2v3h12v-3h2v5H4v-5Z',
   logout: 'M10 4H4v16h6v-2H6V6h4V4Zm4.6 3.6L13.2 9l2 2H9v2h6.2l-2 2 1.4 1.4L19 12l-4.4-4.4Z',
   repeat: 'M7 7h10l-2-2 1.4-1.4L20.8 8l-4.4 4.4L15 11l2-2H7a3 3 0 0 0-3 3H2a5 5 0 0 1 5-5Zm10 10H7l2 2-1.4 1.4L3.2 16l4.4-4.4L9 13l-2 2h10a3 3 0 0 0 3-3h2a5 5 0 0 1-5 5Z',
+  shuffle: 'M17 3h4v4l-1.6-1.6-5.2 5.2-1.4-1.4L18 4 17 3ZM3 5h3l12 14-1 1h4v-4l-1.6 1.6L7 3H3v2Zm0 14h4l4-4.6-1.4-1.5L6 17H3v2Z',
   close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z',
   settings: 'M12 2l2.2 3.2 3.8-.3.3 3.8L22 11v2l-3.7 2.3-.3 3.8-3.8-.3L12 22l-2.2-3.2-3.8.3-.3-3.8L2 13v-2l3.7-2.3.3-3.8 3.8.3L12 2Zm0 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
 };
@@ -117,6 +121,7 @@ export default function Home() {
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const { hasUpdate } = useAppUpdates();
   const [showOnlinePlaylists, setShowOnlinePlaylists] = useState(false);
+  const [onlineMode, setOnlineMode] = useState('download');
   const [savingSong, setSavingSong] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState('');
   const [credentials, setCredentials] = useState(null);
@@ -137,7 +142,7 @@ export default function Home() {
   const [isNative, setIsNative] = useState(false);
   const [showPlayer, setShowPlayer] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
-  const [repeatMode, setRepeatMode] = useState(0);
+  const [playMode, setPlayMode] = useState('order');
   const [favorites, setFavorites] = useState([]);
   const [recent, setRecent] = useState([]);
   const [driveApi, setDriveApi] = useState(null);
@@ -152,6 +157,7 @@ export default function Home() {
   const [storageQuota, setStorageQuota] = useState(null);
   const [audioSrc, setAudioSrc] = useState('');
   const [loadingTrack, setLoadingTrack] = useState(false);
+  const [trackReady, setTrackReady] = useState(false);
   const [upload, setUpload] = useState(null);
   const [syncStatus, setSyncStatus] = useState('');
   const audioRef = useRef(null);
@@ -176,10 +182,53 @@ export default function Home() {
   const automaticRestoreAllowedRef = useRef(true);
   const loginRecoveryCycleRef = useRef(0);
   const googleLoginRef = useRef(null);
+  const playModeRef = useRef('order');
+  const shuffleRef = useRef({ key: '', remaining: [], history: [] });
+  const seekingRef = useRef(false);
+  const seekRequestRef = useRef(null);
+  const seekRevisionRef = useRef(0);
+  const modeChangingRef = useRef(0);
 
   const api = credentials ? driveApi : null;
   const isGoogle = credentials?.provider === 'google';
   const accountName = credentials?.username || '我的账号';
+  const effectiveDuration = duration > 0 ? duration : Number(currentSong?.duration) || 0;
+
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(async () => {
+      let saved = 'order';
+      try { saved = playbackMode(localStorage.getItem('yungan-playback-mode')).id; } catch {}
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const state = await NativeAudio.getState();
+          saved = nativePlaybackMode(state.repeatMode, state.shuffleEnabled);
+        } catch {}
+      }
+      if (active) { playModeRef.current = saved; setPlayMode(saved); }
+    });
+    return () => { active = false; };
+  }, []);
+
+  const updatePlaybackPosition = useCallback((position) => {
+    if (seekingRef.current) return;
+    const pending = seekRequestRef.current;
+    if (pending && pending.songId === currentSong?.id && Date.now() < pending.until && Math.abs(position - pending.position) > 2) return;
+    seekRequestRef.current = null;
+    setProgress(Math.max(0, position));
+  }, [currentSong?.id]);
+
+  const beginSeek = useCallback(() => { seekingRef.current = true; }, []);
+  const cancelSeek = useCallback(() => { seekingRef.current = false; }, []);
+
+  const applyNativeMode = async (id) => {
+    const mode = playbackMode(id);
+    modeChangingRef.current += 1;
+    try {
+      await NativeAudio.setShuffleMode({ enabled: mode.shuffle });
+      await NativeAudio.setRepeatMode({ mode: mode.repeat });
+    } finally { modeChangingRef.current -= 1; }
+  };
 
   const visibleSongs = useMemo(() => {
     let source = songs;
@@ -197,6 +246,7 @@ export default function Home() {
     artist: song.artist || '未知歌手',
     album: song.album || '',
     cover: song.coverUrl || '',
+    durationMillis: Math.round((Number(song.duration) || 0) * 1000),
     url: api.mediaUrl(song.id),
   }));
 
@@ -339,6 +389,7 @@ export default function Home() {
       if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = ''; }
       setIsPlaying(false);
       setLoadingTrack(false);
+      setTrackReady(false);
     }
     try {
       await connectGoogle({ interactive, account });
@@ -562,23 +613,35 @@ export default function Home() {
     if (!isNative || !credentials || showOnlinePlaylists) return undefined;
     const generation = sessionGenerationRef.current;
     const timer = setInterval(async () => {
+      if (!nativeLoadedRef.current) return;
+      const playbackRevision = playbackRequestRef.current;
       try {
         const state = await NativeAudio.getState();
-        if (generation !== sessionGenerationRef.current) return;
-        setIsPlaying(Boolean(state.playing));
-        setProgress(Number(state.position || 0) / 1000);
-        setDuration(Number(state.duration || 0) / 1000);
+        if (generation !== sessionGenerationRef.current || playbackRevision !== playbackRequestRef.current) return;
+        setIsPlaying(Boolean(!state.ended && (state.playing || state.playWhenReady)));
+        if (!modeChangingRef.current) {
+          const nextMode = nativePlaybackMode(state.repeatMode, state.shuffleEnabled);
+          if (nextMode !== playModeRef.current) {
+            playModeRef.current = nextMode;
+            setPlayMode(nextMode);
+            try { localStorage.setItem('yungan-playback-mode', nextMode); } catch {}
+          }
+        }
+        updatePlaybackPosition(Number(state.position || 0) / 1000);
+        if (Number(state.duration) > 0) setDuration(Number(state.duration) / 1000);
         const track = nativeQueueRef.current[state.index];
         if (track && track.id !== currentSong?.id) { setCurrentSong(track); rememberSong(track); }
         if (state.error) setError(state.error);
       } catch {}
     }, 750);
     return () => clearInterval(timer);
-  }, [isNative, credentials, currentSong, rememberSong, showOnlinePlaylists]);
+  }, [isNative, credentials, currentSong, rememberSong, showOnlinePlaylists, updatePlaybackPosition]);
 
-  const startSong = async (song, queue = songs) => {
+  const startSong = async (song, queue = songs, { preserveShuffle = false } = {}) => {
     if (!api || !song) return;
     const nextQueue = queue.some((item) => item.id === song.id) ? queue : [song];
+    const queueKey = nextQueue.map((item) => item.id).join('|');
+    if (!preserveShuffle || shuffleRef.current.key !== queueKey) shuffleRef.current = { key: queueKey, remaining: shuffleBag(nextQueue.length, nextQueue.findIndex((item) => item.id === song.id)), history: [song.id] };
     const request = ++playbackRequestRef.current;
     playbackControllerRef.current?.abort();
     playbackControllerRef.current = new AbortController();
@@ -586,14 +649,21 @@ export default function Home() {
     setCurrentSong(song);
     setPlaybackQueue(nextQueue);
     setProgress(0);
-    setDuration(0);
+    setDuration(Number(song.duration) || 0);
+    seekingRef.current = false;
+    seekRequestRef.current = null;
+    ++seekRevisionRef.current;
     setIsPlaying(false);
+    setTrackReady(false);
+    nativeLoadedRef.current = false;
     setLoadingTrack(true);
     try {
       if (isNative) {
         if (isGoogle) await getGoogleAccessToken({ account: credentials.email });
         if (request !== playbackRequestRef.current) return;
         nativeQueueRef.current = nextQueue;
+        await applyNativeMode(playModeRef.current);
+        if (request !== playbackRequestRef.current) return;
         await NativeAudio.setQueue({ tracks: nativeQueue(nextQueue), index: nextQueue.findIndex((item) => item.id === song.id), position: 0 });
         if (request !== playbackRequestRef.current) return;
         nativeLoadedRef.current = true;
@@ -604,10 +674,14 @@ export default function Home() {
         if (request !== playbackRequestRef.current) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = url.startsWith('blob:') ? url : '';
-        if (audioRef.current?.getAttribute('src') === url) { audioRef.current.currentTime = 0; await audioRef.current.play(); }
+        if (audioRef.current?.getAttribute('src') === url) {
+          if (Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0) setDuration(audioRef.current.duration);
+          audioRef.current.currentTime = 0;
+          await audioRef.current.play();
+        }
         setAudioSrc(url);
       }
-      if (request === playbackRequestRef.current) { rememberSong(song); setIsPlaying(true); }
+      if (request === playbackRequestRef.current) { rememberSong(song); setTrackReady(true); setIsPlaying(true); }
     } catch (requestError) {
       if (request === playbackRequestRef.current && requestError.name !== 'AbortError') { setError(requestError.message); setAudioSrc(''); }
     } finally {
@@ -634,16 +708,36 @@ export default function Home() {
     } catch (requestError) { setError(requestError.message); setIsPlaying(false); }
   };
 
-  const playOffset = async (offset) => {
+  const playOffset = async (offset, automatic = false) => {
     const queue = playbackQueue.length ? playbackQueue : songs;
     if (!queue.length) return;
-    if (isNative && nativeLoadedRef.current) {
-      if (offset > 0) await NativeAudio.next();
-      else await NativeAudio.previous();
-      return;
-    }
-    const index = queue.findIndex((song) => song.id === currentSong?.id);
-    startSong(queue[(Math.max(0, index) + offset + queue.length) % queue.length], queue);
+    try {
+      if (isNative && nativeLoadedRef.current) {
+        if (offset > 0) await NativeAudio.next();
+        else await NativeAudio.previous();
+        return;
+      }
+      const index = Math.max(0, queue.findIndex((song) => song.id === currentSong?.id));
+      let next;
+      if (playModeRef.current === 'shuffle' && queue.length > 1) {
+        const shuffle = shuffleRef.current;
+        if (offset < 0 && shuffle.history.length > 1) {
+          shuffle.history.pop();
+          next = queue.findIndex((song) => song.id === shuffle.history.at(-1));
+          // Rebuild a round after rewinding so the previously next track can be heard again.
+          shuffle.remaining = shuffleBag(queue.length, next);
+        } else if (offset < 0) {
+          next = index;
+        } else {
+          if (!shuffle.remaining.length) shuffle.remaining = shuffleBag(queue.length, index);
+          next = shuffle.remaining.shift();
+          shuffle.history.push(queue[next].id);
+          shuffle.history = shuffle.history.slice(-100);
+        }
+      } else next = offset > 0 ? nextTrackIndex(index, queue.length, playModeRef.current, automatic) : (index - 1 + queue.length) % queue.length;
+      if (next < 0) { setIsPlaying(false); return; }
+      await startSong(queue[next], queue, { preserveShuffle: true });
+    } catch (requestError) { setError(requestError.message); }
   };
   const playNext = () => playOffset(1);
   const playPrevious = () => playOffset(-1);
@@ -664,16 +758,40 @@ export default function Home() {
   }, [credentials, currentSong, isPlaying, loadingTrack]);
 
   const seekTo = async (value) => {
-    setProgress(value);
-    if (isNative) await NativeAudio.seekTo({ position: Math.round(value * 1000) });
-    else if (audioRef.current) audioRef.current.currentTime = value;
+    const position = seekPosition(value, effectiveDuration);
+    const songId = currentSong?.id;
+    const revision = ++seekRevisionRef.current;
+    seekingRef.current = false;
+    seekRequestRef.current = { songId, position, until: Date.now() + 2500 };
+    setProgress(position);
+    try {
+      if (isNative) await NativeAudio.seekTo({ position: Math.round(position * 1000) });
+      else if (audioRef.current) audioRef.current.currentTime = position;
+    } catch (requestError) {
+      if (revision !== seekRevisionRef.current) return;
+      seekRequestRef.current = null;
+      setError(`跳转失败：${requestError.message}`);
+    }
   };
 
-  const cycleRepeat = async () => {
-    const next = (repeatMode + 1) % 3;
-    setRepeatMode(next);
-    if (isNative) await NativeAudio.setRepeatMode({ mode: next });
-    else if (audioRef.current) audioRef.current.loop = next === 1;
+  const changePlayMode = async (id) => {
+    const previous = playModeRef.current;
+    const next = playbackMode(id).id;
+    playModeRef.current = next;
+    setPlayMode(next);
+    try {
+      if (isNative) await applyNativeMode(next);
+      else if (audioRef.current) audioRef.current.loop = next === 'repeat-one';
+      try { localStorage.setItem('yungan-playback-mode', next); } catch {}
+      const queue = playbackQueue.length ? playbackQueue : songs;
+      const index = queue.findIndex((song) => song.id === currentSong?.id);
+      shuffleRef.current = { key: queue.map((song) => song.id).join('|'), remaining: shuffleBag(queue.length, index), history: currentSong ? [currentSong.id] : [] };
+    } catch (requestError) {
+      playModeRef.current = previous;
+      setPlayMode(previous);
+      if (isNative) await applyNativeMode(previous).catch(() => {});
+      setError(`切换播放模式失败：${requestError.message}`);
+    }
   };
 
   const toggleFavorite = () => {
@@ -713,6 +831,7 @@ export default function Home() {
     setAudioSrc('');
     setUpload(null);
     setLoadingTrack(false);
+    setTrackReady(false);
     setShowPlayer(false);
     setShowQueue(false);
     setActiveNav('云端曲库');
@@ -798,7 +917,7 @@ export default function Home() {
     finally { setSavingSong(false); }
   };
 
-  const openOnlinePlaylists = async () => {
+  const openOnlinePlaylists = async (mode = 'download') => {
     setMenuOpen(false);
     ++playbackRequestRef.current;
     playbackControllerRef.current?.abort();
@@ -809,11 +928,16 @@ export default function Home() {
     setAudioSrc('');
     setIsPlaying(false);
     setLoadingTrack(false);
+    // Android keeps its paused native queue while finding songs. Its progress
+    // control must remain ready when returning and resuming the same song.
+    if (!isNative) setTrackReady(false);
     setShowPlayer(false);
     setShowQueue(false);
     setShowSettings(false);
+    setOnlineMode(mode === 'discover' ? 'discover' : 'download');
     setShowOnlinePlaylists(true);
   };
+  const openDiscovery = () => openOnlinePlaylists('discover');
 
   const uploadDownloadedMp3 = api && credentials ? async (file, metadata) => {
     const generation = sessionGenerationRef.current;
@@ -842,9 +966,9 @@ export default function Home() {
     return song;
   } : null;
   const openSettings = () => { setMenuOpen(false); setShowPlayer(false); setShowQueue(false); setShowSettings(true); };
-  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
+  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
   const settingsPage = <AppSettings user={credentials} onLogin={() => { setShowSettings(false); setShowOnlinePlaylists(false); beginGoogleLogin(); }} onBack={() => setShowSettings(false)} onOpenPlaylists={openOnlinePlaylists} busy={busy} />;
-  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
+  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists initialMode={onlineMode} taste={{ songs, favorites, recent, currentSong, currentQueue: playbackQueue }} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
   if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} />}</>;
 
   const navItems = [
@@ -869,6 +993,7 @@ export default function Home() {
               <Icon name={icon} size={19} /> <span>{label}</span>
             </button>
           ))}
+          <button onClick={openDiscovery}><Icon name="search" size={19} /><span>发现音乐</span></button>
           <p>Google Drive</p>
           <button onClick={openOnlinePlaylists}><Icon name="radio" size={19} /><span>歌单下载</span></button>
           <button disabled={busy || Boolean(upload)} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={19} /><span>我的云盘</span></button>
@@ -961,14 +1086,14 @@ export default function Home() {
         </button>
         <div className="player-center">
           <div className="player-controls">
-            <button onClick={playPrevious}><Icon name="previous" size={19} /></button>
+            <button onClick={playPrevious} aria-label="上一首" disabled={!currentSong || loadingTrack}><Icon name="previous" size={19} /></button>
             <button className="main-play" onClick={togglePlay} disabled={!currentSong || loadingTrack} aria-label={isPlaying ? '暂停' : '播放'}><Icon name={isPlaying ? 'pause' : 'play'} size={21} /></button>
-            <button onClick={playNext}><Icon name="next" size={19} /></button>
+            <button onClick={playNext} aria-label="下一首" disabled={!currentSong || loadingTrack}><Icon name="next" size={19} /></button>
           </div>
-          <div className="progress-row"><span>{formatTime(progress)}</span><input type="range" min="0" max={duration || 1} value={progress} onChange={(event) => seekTo(Number(event.target.value))} /><span>{formatTime(duration || currentSong?.duration)}</span></div>
+          <div className="progress-row"><span>{formatTime(progress)}</span><SeekBar value={progress} duration={effectiveDuration} disabled={loadingTrack || !trackReady} onSeek={seekTo} onPreview={setProgress} onSeekStart={beginSeek} onSeekCancel={cancelSeek} /><span>{formatTime(effectiveDuration)}</span></div>
         </div>
         <div className="player-tools">
-          <button className={`repeat-tool ${repeatMode ? 'active-tool' : ''}`} onClick={cycleRepeat}><Icon name="repeat" size={19} /></button>
+          <PlaybackModeControl className="repeat-tool" value={playMode} onChange={changePlayMode} Icon={Icon} />
           <button className="volume-button" onClick={() => setShowVolume((shown) => !shown)} aria-label="音量"><Icon name="volume" size={19} /></button>
           <div className={`volume-control ${showVolume ? 'open' : ''}`}>
             <input aria-label="音量调节" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
@@ -976,7 +1101,7 @@ export default function Home() {
           </div>
           <button onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="list" size={19} /></button>
         </div>
-        {!isNative && <audio ref={audioRef} src={audioSrc || undefined} autoPlay={Boolean(audioSrc)} loop={repeatMode === 1} onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime || 0)} onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onEnded={() => { if (repeatMode === 2 || playbackQueue.findIndex((song) => song.id === currentSong?.id) < playbackQueue.length - 1) playNext(); else setIsPlaying(false); }} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onError={() => { if (audioSrc) { setIsPlaying(false); setError('无法播放这首歌曲，请检查网络、Google 授权或音频格式。'); } }} />}
+        {!isNative && <audio ref={audioRef} src={audioSrc || undefined} autoPlay={Boolean(audioSrc)} loop={playMode === 'repeat-one'} onTimeUpdate={(event) => updatePlaybackPosition(event.currentTarget.currentTime || 0)} onLoadedMetadata={(event) => { if (Number.isFinite(event.currentTarget.duration) && event.currentTarget.duration > 0) setDuration(event.currentTarget.duration); }} onEnded={() => playOffset(1, true)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onError={() => { if (audioSrc) { setIsPlaying(false); setError('无法播放这首歌曲，请检查网络、Google 授权或音频格式。'); } }} />}
       </footer>
 
       {showPlayer && (
@@ -985,15 +1110,15 @@ export default function Home() {
           <div className={`vinyl ${isPlaying ? 'spinning' : ''}`}>
             <div><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" size={52} />} /></div>
           </div>
-          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p></div>
-          <button className={`full-heart ${favorites.includes(currentSong?.id) ? 'is-favorite' : ''}`} onClick={toggleFavorite}><Icon name="heart" size={25} /></button>
-          <div className="full-progress"><input type="range" min="0" max={duration || 1} value={progress} onChange={(event) => seekTo(Number(event.target.value))} /><div><span>{formatTime(progress)}</span><span>{formatTime(duration || currentSong?.duration)}</span></div></div>
+          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p><button className="song-radio-entry" onClick={openDiscovery} disabled={!currentSong}><Icon name="radio" size={18} />从这首歌开启电台</button></div>
+          <button className={`full-heart ${favorites.includes(currentSong?.id) ? 'is-favorite' : ''}`} onClick={toggleFavorite} aria-label={favorites.includes(currentSong?.id) ? '取消收藏' : '收藏歌曲'}><Icon name="heart" size={25} /></button>
+          <div className="full-progress"><SeekBar value={progress} duration={effectiveDuration} disabled={loadingTrack || !trackReady} onSeek={seekTo} onPreview={setProgress} onSeekStart={beginSeek} onSeekCancel={cancelSeek} /><div><span>{formatTime(progress)}</span><span>{formatTime(effectiveDuration)}</span></div></div>
           <div className="full-controls">
-            <button onClick={cycleRepeat} className={repeatMode ? 'active-tool' : ''}><Icon name="repeat" size={22} /></button>
-            <button onClick={playPrevious}><Icon name="previous" size={28} /></button>
-            <button className="full-play" onClick={togglePlay} disabled={!currentSong || loadingTrack}><Icon name={isPlaying ? 'pause' : 'play'} size={31} /></button>
-            <button onClick={playNext}><Icon name="next" size={28} /></button>
-            <button onClick={() => setShowQueue(true)}><Icon name="list" size={23} /></button>
+            <PlaybackModeControl value={playMode} onChange={changePlayMode} Icon={Icon} />
+            <button onClick={playPrevious} aria-label="上一首" disabled={!currentSong || loadingTrack}><Icon name="previous" size={28} /></button>
+            <button className="full-play" onClick={togglePlay} disabled={!currentSong || loadingTrack} aria-label={isPlaying ? '暂停' : '播放'}><Icon name={isPlaying ? 'pause' : 'play'} size={31} /></button>
+            <button onClick={playNext} aria-label="下一首" disabled={!currentSong || loadingTrack}><Icon name="next" size={28} /></button>
+            <button onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="list" size={23} /></button>
           </div>
         </section>
       )}
