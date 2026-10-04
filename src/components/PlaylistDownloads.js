@@ -45,7 +45,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const request = async (config, route, data, method) => {
     const response = await fetch(`${config.url}${route}`, {
       method: method || (data ? 'POST' : 'GET'), headers: { Authorization: `Bearer ${config.token}`, ...(data ? { 'Content-Type': 'application/json' } : {}) },
-      ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(['/inspect', '/match', '/search'].includes(route) ? 180000 : 30000),
+      ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(['/inspect', '/match', '/search', '/radio'].includes(route) ? 180000 : 30000),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `请求失败 ${response.status}`);
@@ -217,7 +217,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   });
 
   return <section className="download-panel" aria-label="下载 MP3 并上传云端">
-    {discoveryMode && <MusicDiscovery taste={taste} playlists={playlists} available={Boolean(connection)} canDownload={Boolean(connection) && !busy && job?.state !== 'running'} onSearch={(value) => request(connection, '/search', value)} onInspectSpotify={(url) => request(connection, '/inspect', { url })} onDownload={downloadDiscovered} onChooseSpotifyTrack={chooseSpotifyDiscovery} />}
+    {discoveryMode && <MusicDiscovery taste={taste} playlists={playlists} available={Boolean(connection)} canDownload={Boolean(connection) && !busy && job?.state !== 'running'} onSearch={(value) => request(connection, '/search', value)} onRadio={(value) => request(connection, '/radio', value)} onMatchTrack={(track) => request(connection, '/match', track)} onInspectSpotify={(url) => request(connection, '/inspect', { url })} onDownload={downloadDiscovered} onChooseSpotifyTrack={chooseSpotifyDiscovery} />}
     <h2>{discoveryMode ? '搜索与下载服务' : '下载 MP3 · 云端保存'}</h2>
     {!discoveryMode && !playlist && !discoveredEntries && <p>先在上方粘贴歌单链接并导入，或从“我的歌单”选择一个歌单，也可以在“发现音乐”搜索歌曲。</p>}
     {!discoveryMode && !discoveredEntries && playlist?.provider === 'spotify' && <div className="download-actions" role="group" aria-label="Spotify 歌单音源选择">

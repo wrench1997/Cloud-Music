@@ -16,6 +16,29 @@ function searchOptions(value = {}) {
   return { query, page, limit };
 }
 
+function radioOptions(value = {}) {
+  if (typeof value.videoId !== 'string' || !/^[\w-]{11}$/.test(value.videoId)) throw new Error('请使用有效的 YouTube 单曲作为电台起点。');
+  const radioId = value.radioId === undefined ? `RDAMVM${value.videoId}` : value.radioId;
+  if (typeof radioId !== 'string' || ![`RD${value.videoId}`, `RDAMVM${value.videoId}`].includes(radioId)) throw new Error('仅支持这首歌曲对应的 YouTube / YouTube Music 电台。');
+  const { page, limit } = searchOptions({ query: 'radio', page: value.page, limit: value.limit });
+  const origin = radioId.startsWith('RDAMVM') ? 'https://music.youtube.com' : 'https://www.youtube.com';
+  return { videoId: value.videoId, radioId, page, limit, url: `${origin}/watch?v=${value.videoId}&list=${radioId}` };
+}
+
+function discoveryEntries(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    if (!/^[\w-]{11}$/.test(item?.id) || seen.has(item.id)) return false;
+    seen.add(item.id); return true;
+  }).map((item) => ({
+    title: String(item.track || item.title || item.id).slice(0, 300),
+    artist: String(item.artist || item.uploader || item.channel || '').slice(0, 300),
+    artistIsChannel: !item.artist, duration: Math.max(0, Number(item.duration) || 0),
+    coverUrl: safeCoverUrl(item.thumbnail) || (Array.isArray(item.thumbnails) ? item.thumbnails : []).map((thumbnail) => safeCoverUrl(thumbnail?.url)).find(Boolean) || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`,
+    url: `https://www.youtube.com/watch?v=${item.id}`, metadataProvider: 'youtube',
+  }));
+}
+
 function parseSource(value) {
   let url;
   try { url = new URL(value); } catch { throw new Error('请填写有效的歌单链接。'); }
@@ -56,6 +79,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   const nodeRuntime = path.join(toolsDir, process.platform === 'win32' ? 'node.exe' : 'node');
   const jobs = new Map();
   const children = new Set();
+  const radioPages = new Map();
   let server;
   let mobileServer;
   let mobileStarting;
@@ -150,18 +174,32 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     const start = (page - 1) * limit + 1;
     const end = page * limit + 1;
     const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-start', String(start), '--playlist-end', String(end), '--', `ytsearch${end}:${query}`]));
-    const seen = new Set();
-    const entries = (data.entries || []).filter((item) => {
-      if (!/^[\w-]{11}$/.test(item.id) || seen.has(item.id)) return false;
-      seen.add(item.id); return true;
-    });
-    return { provider: 'youtube', query, page, hasMore: page < 5 && entries.length > limit, entries: entries.slice(0, limit).map((item) => ({
-      title: String(item.track || item.title || item.id).slice(0, 300),
-      artist: String(item.artist || item.uploader || item.channel || '').slice(0, 300),
-      artistIsChannel: !item.artist, duration: Math.max(0, Number(item.duration) || 0),
-      coverUrl: safeCoverUrl(item.thumbnail) || (item.thumbnails || []).map((thumbnail) => safeCoverUrl(thumbnail.url)).find(Boolean) || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`,
-      url: `https://www.youtube.com/watch?v=${item.id}`, metadataProvider: 'youtube',
-    })), notice: '搜索和音源来自 YouTube。下载时读取实际歌曲信息并嵌入 MP3。' };
+    const entries = discoveryEntries(data.entries);
+    return { provider: 'youtube', query, page, hasMore: page < 5 && entries.length > limit, entries: entries.slice(0, limit), notice: '搜索和音源来自 YouTube。下载时读取实际歌曲信息并嵌入 MP3。' };
+  }
+  async function radio(value) {
+    const options = radioOptions(value);
+    if (disposed) throw new Error('下载服务已关闭。');
+    const cacheKey = `${options.radioId}:${options.limit}:${options.page}`;
+    const cached = radioPages.get(cacheKey);
+    if (cached?.expires > Date.now()) return cached.promise;
+    const pending = (async () => {
+      const start = (options.page - 1) * options.limit + 1;
+      const end = options.page * options.limit + 1;
+      // A Mix may be endless. The extractor must stop at this explicit bound; never inspect the entire radio.
+      const data = JSON.parse(await run(['--yes-playlist', '--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-start', String(start), '--playlist-end', String(end), '--', options.url]));
+      const entries = discoveryEntries(data.entries);
+      if (!entries.length) throw new Error('YouTube 暂未返回可用电台曲目，可以换一首起点或在原平台打开电台。');
+      return { provider: 'youtube', recommendationProvider: 'youtube-mix', radioId: options.radioId, seedVideoId: options.videoId,
+        title: String(data.title || 'YouTube 歌曲电台').slice(0, 300), url: options.url, page: options.page,
+        hasMore: options.page < 5 && entries.length > options.limit, entries: entries.slice(0, options.limit),
+        notice: '曲目与顺序来自 YouTube 公开歌曲电台，会随平台变化；未登录你的 YouTube 账号，可能与账号内电台不同。' };
+    })();
+    const record = { expires: Date.now() + 5 * 60 * 1000, promise: pending };
+    radioPages.set(cacheKey, record);
+    while (radioPages.size > 30) radioPages.delete(radioPages.keys().next().value);
+    try { return await pending; }
+    catch (error) { if (radioPages.get(cacheKey) === record) radioPages.delete(cacheKey); throw error; }
   }
   function publicJob(job) { return { id: job.id, createdAt: job.createdAt, state: job.state, title: job.title, progress: job.progress, phase: job.phase, completed: job.completed, total: job.total, failures: job.failures, error: job.error, files: job.files, metadataRepair: job.metadataRepair }; }
   function metadataOptions(job) { return { ffmpeg, fetchImpl, spawnProcess: metadataProcess, isCancelled: () => disposed || job.cancelled, onChild: (child, add) => add ? children.add(child) : children.delete(child) }; }
@@ -318,6 +356,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       if (request.method === 'POST' && url.pathname === '/inspect') { reply(response, 200, await inspect((await readJson(request)).url)); return; }
       if (request.method === 'POST' && url.pathname === '/match') { reply(response, 200, await match(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/search') { reply(response, 200, await search(await readJson(request))); return; }
+      if (request.method === 'POST' && url.pathname === '/radio') { reply(response, 200, await radio(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/jobs') { reply(response, 200, startJob((await readJson(request)).entries)); return; }
       const jobRoute = url.pathname.match(/^\/jobs\/([\w-]+)$/);
       const retryRoute = url.pathname.match(/^\/jobs\/([\w-]+)\/retry$/);
@@ -377,13 +416,13 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     const addresses = port ? Object.values(os.networkInterfaces()).flat().filter((entry) => entry?.family === 'IPv4' && !entry.internal).map((entry) => `http://${entry.address}:${port}#${token}`) : [];
     return { url: baseUrl, token, pairingLinks: addresses, outputDir };
   }
-  function dispose() { disposed = true; for (const child of children) child.kill(); server?.closeAllConnections(); server?.close(); mobileServer?.closeAllConnections(); mobileServer?.close(); }
+  function dispose() { disposed = true; radioPages.clear(); for (const child of children) child.kill(); server?.closeAllConnections(); server?.close(); mobileServer?.closeAllConnections(); mobileServer?.close(); }
   function handleLocal(request, response) {
     request.headers.authorization = `Bearer ${token}`;
     delete request.headers.origin;
     return handle(request, response);
   }
-  return { connect, inspect, match, search, startJob, repairJob, dispose, handleLocal };
+  return { connect, inspect, match, search, radio, startJob, repairJob, dispose, handleLocal };
 }
 
-module.exports = { createDownloadService, parseSource, parseSpotifyMetadata, searchOptions };
+module.exports = { createDownloadService, parseSource, parseSpotifyMetadata, searchOptions, radioOptions };

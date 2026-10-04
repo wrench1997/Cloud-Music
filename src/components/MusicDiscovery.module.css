@@ -1,4 +1,5 @@
 .discovery { min-width: 0; }
+.results { scroll-margin-top: 80px; }
 .hero { display: flex; align-items: center; gap: 18px; padding: 26px; border-radius: 24px; background: linear-gradient(125deg, #fff1ed, #ffe4e9 60%, #f2e9ff); }
 .hero h2 { margin: 5px 0 8px; font-size: 30px; font-weight: 800; }
 .hero p { margin: 0; color: #78545b; line-height: 1.65; }
@@ -29,7 +30,7 @@
 .resultHeader p { font-size: 12px; color: #9a798a; margin: 0; }
 .resultHeader label { flex-shrink: 0; font-size: 12px; display: flex; align-items: center; gap: 7px; min-height: 44px; }
 .sourceHint, .privacy { font-size: 12px; color: #888; line-height: 1.7; }
-.track { display: flex; align-items: center; gap: 15px; padding: 16px 0; border-bottom: 1px solid #eee8ec; }
+.track { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; padding: 16px 0; border-bottom: 1px solid #eee8ec; }
 .trackChoice { display: flex; flex: 1; align-items: center; gap: 13px; min-width: 0; }
 .cover { flex-shrink: 0; width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; border-radius: 17px; background: #fde7ec; color: #cf6786; overflow: hidden; font-size: 25px; }
 .cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -37,16 +38,17 @@
 .trackText b { font-size: 14px; line-height: 1.5; display: block; overflow-wrap: anywhere; }
 .trackText small { display: block; color: #888; font-size: 11px; line-height: 1.6; margin-top: 4px; }
 .trackText .reason { color: #ae607e; }
-.trackActions { display: flex; gap: 8px; flex-shrink: 0; }
+.trackActions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; max-width: 100%; }
 .trackActions button { min-height: 44px; border-radius: 22px; padding: 10px 15px; font-size: 12px; }
 .downloadBar, .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; }
 .downloadBar { font-size: 13px; }
 .downloadBar button { min-height: 48px; padding: 12px 24px; border-radius: 24px; }
 .pagination { justify-content: center; font-size: 12px; }
 .pagination button { min-height: 44px; padding: 10px 17px; }
-.preview { padding: 15px; border: 1px solid #e5d4dc; border-radius: 20px; background: #fff; margin-top: 18px; }
+.preview { box-sizing: border-box; flex: 1 0 100%; min-width: 0; width: 100%; padding: 15px; border: 1px solid #e5d4dc; border-radius: 20px; background: #fff; margin-top: 18px; }
 .preview > div { display: flex; justify-content: space-between; align-items: center; gap: 15px; font-size: 13px; }
-.preview button { min-width: 44px; min-height: 44px; font-size: 22px; }
+.preview > div b { min-width: 0; overflow-wrap: anywhere; }
+.preview button { flex-shrink: 0; min-width: 44px; min-height: 44px; font-size: 22px; }
 .preview iframe { width: 100%; border: 0; border-radius: 14px; aspect-ratio: 16 / 9; }
 .spotify { background: #f5f9f6; padding: 20px; margin-top: 26px; border: 1px solid #deece2; border-radius: 22px; }
 .spotify h3 { margin: 0 0 8px; font-size: 18px; }
@@ -54,11 +56,13 @@
 .savedPlaylists { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .savedPlaylists button { min-height: 44px; }
 .spotifyTracks { max-height: 500px; overflow: auto; }
-.spotifyTracks > div { display: flex; gap: 12px; justify-content: space-between; padding: 15px 0; border-top: 1px solid #dfe8e2; }
+.spotifyTracks > div { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; padding: 15px 0; border-top: 1px solid #dfe8e2; }
+.spotifyTracks > div > span { flex: 1 1 170px; min-width: 0; }
 .spotifyTracks b, .spotifyTracks small { display: block; }
 .spotifyTracks b { font-size: 13px; overflow-wrap: anywhere; }
 .spotifyTracks small { font-size: 11px; margin-top: 6px; color: #7a8b80; }
-.spotifyTracks > div > div { display: flex; align-items: center; flex-shrink: 0; gap: 10px; font-size: 12px; }
+.spotifyTracks > div > div { display: flex; flex-wrap: wrap; align-items: center; flex-shrink: 0; max-width: 100%; gap: 10px; font-size: 12px; }
+.spotifyTracks > div > div a { display: inline-flex; align-items: center; min-height: 44px; }
 .spotifyTracks button { min-height: 44px; }
 .empty { color: #888; padding: 20px 0; font-size: 13px; }
 .privacy { margin-top: 20px; }
@@ -86,4 +90,91 @@
   .spotifyTracks > div { flex-wrap: wrap; }
   .spotifyTracks > div > div { justify-content: flex-end; width: 100%; }
   .preview { padding: 10px; }
+}
+
+.discoveryTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 22px 0; padding: 6px; border: 1px solid #eedfe7; border-radius: 22px; background: #faf3f6; }
+.discoveryTabs button { min-width: 0; min-height: 48px; padding: 12px 16px; border: 0; border-radius: 16px; background: transparent; color: #826977; font: inherit; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; transition: background .18s, color .18s, box-shadow .18s; }
+.discoveryTabs button:hover { background: #fff8fb; color: #9b3f66; }
+.discoveryTabs button[aria-pressed='true'] { color: #ad3f67; background: #fff; box-shadow: 0 3px 12px #a15b7614; }
+.discoveryTabs button:focus-visible, .radioSeeds button:focus-visible, .chartActions button:focus-visible, .chartActions a:focus-visible, .spotifyCandidates button:focus-visible { outline: 2px solid #b74570; outline-offset: 3px; }
+
+.radioStart { display: flex; align-items: end; gap: 12px; margin-top: 24px; }
+.discovery .radioStart label, .discovery .searchForm label { min-width: 0; }
+.radioStart label { flex: 1; min-width: 0; color: #765768; font-size: 13px; line-height: 1.6; }
+.radioStart input { box-sizing: border-box; display: block; width: 100%; min-height: 52px; margin-top: 8px; padding: 14px 18px; border: 1px solid #e9cbd9; border-radius: 18px; background: #fffafd; color: #45303c; font: inherit; font-size: 15px; }
+.radioStart input::placeholder { color: #a48a98; }
+.radioStart input:focus { outline: 2px solid #db91ad; outline-offset: 2px; }
+.radioStart button { flex-shrink: 0; min-height: 52px; padding: 14px 26px; border-radius: 26px; box-shadow: 0 5px 16px #ef56772b; font-size: 14px; font-weight: 600; }
+.radioSeeds { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 16px; }
+.radioSeeds button { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid #ecdbe4; border-radius: 23px; background: #fff; color: #593b4b; text-align: left; font: inherit; overflow-wrap: anywhere; box-shadow: 0 4px 16px #ac59780a; transition: transform .18s, box-shadow .18s, border-color .18s; }
+.radioSeeds button:hover { transform: translateY(-3px); border-color: #dda2bc; box-shadow: 0 9px 24px #ac59781a; }
+.radioSeeds button[aria-pressed='true'] { background: #fff2f8; border-color: #d6799e; }
+.radioSeeds .cover { width: 100%; height: auto; min-height: 90px; max-height: 230px; aspect-ratio: 1; border-radius: 16px; background: linear-gradient(145deg, #ffe4ed, #eedfff); font-size: 40px; }
+.radioSeeds .cover img { display: block; width: 100%; height: 100%; aspect-ratio: 1; object-fit: cover; }
+.radioSeeds b, .radioSeeds small { display: block; }
+.radioSeeds b { font-size: 15px; line-height: 1.45; }
+.radioSeeds small { margin-top: 5px; color: #987a89; font-size: 11px; line-height: 1.6; }
+
+.chartGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 18px 0 24px; }
+.chartGrid article { min-width: 0; display: flex; flex-direction: column; align-items: start; gap: 16px; padding: 24px 20px 20px; border: 1px solid #d8e9df; border-radius: 24px; background: linear-gradient(145deg, #e1f7e8, #f6fbf7 75%); box-shadow: 0 5px 16px #426b5009; }
+.chartGrid article:nth-child(2) { background: linear-gradient(145deg, #e0f6ed, #f5fbf8 75%); }
+.chartGrid article:nth-child(3) { background: linear-gradient(145deg, #eaf5dd, #f8fbf5 75%); }
+.chartBadge { display: flex; align-items: center; justify-content: center; width: 72px; height: 72px; flex-shrink: 0; border: 1px solid #ffffffa6; border-radius: 21px; background: #fff9; color: #29784b; font-size: 36px; line-height: 1; font-weight: 800; letter-spacing: -2px; }
+.chartTitle { flex: 1; min-width: 0; }
+.chartTitle small { color: #648772; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+.chartTitle h4 { margin: 0; color: #27543a; font-size: 18px; line-height: 1.5; }
+.chartTitle p { margin: 7px 0 0; color: #708879; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.chartActions { width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.chartActions button { min-width: 0; min-height: 48px; padding: 12px 18px; border: 1px solid #71b68c; border-radius: 24px; background: #308254; color: #fff; font: inherit; font-size: 13px; font-weight: 600; }
+.chartActions button:hover:not(:disabled) { background: #246b43; }
+.chartActions a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 3px; color: #447759; font-size: 12px; }
+.spotifyCandidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.spotifyCandidates > h4, .spotifyCandidates > p { grid-column: 1 / -1; margin: 0; }
+.spotifyCandidates > h4 { color: #365b44; font-size: 15px; overflow-wrap: anywhere; }
+.spotifyCandidates > p { color: #7a8b80; font-size: 12px; line-height: 1.6; }
+.spotifyCandidates article { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid #d4e4d9; border-radius: 20px; background: #fff; color: #365b44; overflow-wrap: anywhere; }
+.spotifyCandidates article > div { flex: 1; min-width: 0; }
+.spotifyCandidates article > a { display: inline-flex; align-self: start; align-items: center; min-height: 44px; color: #447759; font-size: 12px; }
+.spotifyCandidates button { min-width: 0; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 16px; border: 1px solid #b2d5bc; border-radius: 24px; background: #eef9f1; color: #365b44; text-align: center; font: inherit; font-size: 13px; overflow-wrap: anywhere; transition: border-color .18s, background .18s; }
+.spotifyCandidates button:hover { border-color: #89bd9b; background: #f3fbf5; }
+.spotifyCandidates button > span:not(.cover) { min-width: 0; }
+.spotifyCandidates .cover { width: 60px; height: 60px; border-radius: 14px; background: #e5f1e7; color: #5b986f; }
+.spotifyCandidates b, .spotifyCandidates small { display: block; }
+.spotifyCandidates b { font-size: 13px; line-height: 1.5; }
+.spotifyCandidates small { margin-top: 5px; color: #7a8b80; font-size: 11px; line-height: 1.6; }
+.discoveryTabs button:disabled, .radioSeeds button:disabled, .chartActions button:disabled, .spotifyCandidates button:disabled { opacity: .55; cursor: default; transform: none; }
+
+@media (max-width: 1000px) {
+  .chartGrid { gap: 12px; }
+  .chartGrid article { padding: 20px 16px 16px; }
+  .chartActions button { width: 100%; }
+}
+
+@media (max-width: 760px) {
+  .hero { border-radius: 25px; }
+  .hero > button { min-height: 54px; font-size: 15px; font-weight: 600; }
+  .discoveryTabs { gap: 4px; margin: 18px 0; padding: 5px; border-radius: 20px; }
+  .discoveryTabs button { min-height: 48px; padding: 10px 6px; font-size: 12px; line-height: 1.5; border-radius: 15px; }
+  .radioStart { flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+  .radioStart label { flex-basis: 100%; }
+  .radioStart button { width: 100%; min-height: 54px; }
+  .radioSeeds { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .radioSeeds button { gap: 10px; padding: 10px; border-radius: 20px; }
+  .radioSeeds .cover { border-radius: 14px; font-size: 34px; }
+  .radioSeeds b { font-size: 13px; }
+  .radioSeeds small { font-size: 10px; }
+  .chartGrid { grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 16px; }
+  .chartGrid article { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 14px; padding: 19px; border-radius: 22px; }
+  .chartTitle h4 { font-size: 17px; }
+  .chartActions { grid-column: 1 / -1; }
+  .chartActions button { width: auto; flex: 1; }
+  .chartActions a { flex-shrink: 0; padding: 0 6px; }
+  .spotifyCandidates { grid-template-columns: minmax(0, 1fr); }
+  .downloadBar { flex-wrap: wrap; }
+  .downloadBar button { min-height: 50px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discoveryTabs button, .radioSeeds button, .spotifyCandidates button { transition: none; }
+  .radioSeeds button:hover { transform: none; }
 }

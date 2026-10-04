@@ -32,6 +32,51 @@ export const discoveryMoods = [
   { key: 'mood:instrumental', label: '纯音乐', query: 'instrumental music official audio', reason: '探索纯音乐' },
 ];
 
+// IDs were checked against the official Spotify-owned daily chart embed pages.
+// Only the chart links are static; the actual tracks are always fetched from Spotify.
+export const spotifyCharts = [
+  { key: 'global', label: '全球 Top 50', region: '全球热听', url: 'https://open.spotify.com/playlist/37i9dQZEVXbMDoHDwVN2tF' },
+  { key: 'hk', label: '香港 Top 50', region: '香港地区', url: 'https://open.spotify.com/playlist/37i9dQZEVXbLwpL8TjsxOG' },
+  { key: 'tw', label: '台湾 Top 50', region: '台湾地区', url: 'https://open.spotify.com/playlist/37i9dQZEVXbMnZEatlMSiu' },
+];
+
+export function youtubeVideoId(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return '';
+    let id;
+    if (url.hostname === 'youtu.be' && /^\/[\w-]{11}\/?$/.test(url.pathname)) id = url.pathname.split('/')[1];
+    else if (['www.youtube.com', 'youtube.com', 'music.youtube.com', 'm.youtube.com'].includes(url.hostname) && url.pathname === '/watch') id = url.searchParams.get('v');
+    return /^[\w-]{11}$/.test(id || '') ? id : '';
+  } catch { return ''; }
+}
+
+export function youtubeRadioLink(value) {
+  const id = youtubeVideoId(value);
+  return id ? `https://music.youtube.com/watch?v=${id}&list=RDAMVM${id}` : '';
+}
+
+export function radioSeeds({ songs = [], favorites = [], recent = [], currentSong, currentQueue = [] } = {}) {
+  const all = [...songs, ...currentQueue, ...(currentSong ? [currentSong] : [])].filter(Boolean);
+  const byId = new Map(all.map((song) => [song.id, song]));
+  const seen = new Set();
+  const seeds = [];
+  const append = (song, reason) => {
+    if (!song) return;
+    const url = song.sourceUrl || song.url;
+    const id = youtubeVideoId(url);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    seeds.push({ videoId: id, url: `https://www.youtube.com/watch?v=${id}`, title: clean(song.title) || 'YouTube 歌曲', artist: clean(song.artist), coverUrl: song.coverUrl || '', reason });
+  };
+  append(currentSong, '当前歌曲');
+  recent.slice(0, 20).forEach((id) => append(byId.get(id), '最近播放'));
+  favorites.slice(0, 30).forEach((id) => append(byId.get(id), '你的收藏'));
+  currentQueue.forEach((song) => append(song, '当前播放队列'));
+  songs.forEach((song) => append(song, '来自你的曲库'));
+  return seeds.slice(0, 8);
+}
+
 export function platformSearchLink(provider, query) {
   const safeQuery = clean(query, 240);
   if (!safeQuery) return '';
@@ -46,7 +91,7 @@ export function isInLibrary(entry, songs = []) {
     || (title && artist && normalize(song.title) === title && normalize(song.artist) === artist));
 }
 
-export function rankDiscoveryResults(entries, { songs = [], seed, hideKnown = true } = {}) {
+export function rankDiscoveryResults(entries, { songs = [], seed, hideKnown = true, preserveOrder = false } = {}) {
   const seen = new Set();
   const artistKey = normalize(seed?.label);
   return (Array.isArray(entries) ? entries : []).flatMap((entry, index) => {
@@ -59,7 +104,7 @@ export function rankDiscoveryResults(entries, { songs = [], seed, hideKnown = tr
     const musicLength = Number(entry.duration) >= 45 && Number(entry.duration) <= 900;
     const official = /official|官方/i.test(entry.title || '');
     return [{ ...entry, inLibrary, reason: seed?.reason || '符合你的搜索关键词', affinityScore: (knownArtist ? 4 : 0) + (musicLength ? 2 : 0) + (official ? 1 : 0) + (inLibrary ? 0 : 1), resultOrder: index }];
-  }).sort((a, b) => b.affinityScore - a.affinityScore || a.resultOrder - b.resultOrder);
+  }).sort((a, b) => preserveOrder ? a.resultOrder - b.resultOrder : b.affinityScore - a.affinityScore || a.resultOrder - b.resultOrder);
 }
 
 export function formatDiscoveryDuration(seconds) {

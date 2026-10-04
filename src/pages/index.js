@@ -674,7 +674,11 @@ export default function Home() {
         if (request !== playbackRequestRef.current) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = url.startsWith('blob:') ? url : '';
-        if (audioRef.current?.getAttribute('src') === url) { audioRef.current.currentTime = 0; await audioRef.current.play(); }
+        if (audioRef.current?.getAttribute('src') === url) {
+          if (Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0) setDuration(audioRef.current.duration);
+          audioRef.current.currentTime = 0;
+          await audioRef.current.play();
+        }
         setAudioSrc(url);
       }
       if (request === playbackRequestRef.current) { rememberSong(song); setTrackReady(true); setIsPlaying(true); }
@@ -924,7 +928,9 @@ export default function Home() {
     setAudioSrc('');
     setIsPlaying(false);
     setLoadingTrack(false);
-    setTrackReady(false);
+    // Android keeps its paused native queue while finding songs. Its progress
+    // control must remain ready when returning and resuming the same song.
+    if (!isNative) setTrackReady(false);
     setShowPlayer(false);
     setShowQueue(false);
     setShowSettings(false);
@@ -962,7 +968,7 @@ export default function Home() {
   const openSettings = () => { setMenuOpen(false); setShowPlayer(false); setShowQueue(false); setShowSettings(true); };
   const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
   const settingsPage = <AppSettings user={credentials} onLogin={() => { setShowSettings(false); setShowOnlinePlaylists(false); beginGoogleLogin(); }} onBack={() => setShowSettings(false)} onOpenPlaylists={openOnlinePlaylists} busy={busy} />;
-  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists initialMode={onlineMode} taste={{ songs, favorites, recent }} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
+  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists initialMode={onlineMode} taste={{ songs, favorites, recent, currentSong, currentQueue: playbackQueue }} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
   if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} />}</>;
 
   const navItems = [
@@ -1104,7 +1110,7 @@ export default function Home() {
           <div className={`vinyl ${isPlaying ? 'spinning' : ''}`}>
             <div><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" size={52} />} /></div>
           </div>
-          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p></div>
+          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p><button className="song-radio-entry" onClick={openDiscovery} disabled={!currentSong}><Icon name="radio" size={18} />从这首歌开启电台</button></div>
           <button className={`full-heart ${favorites.includes(currentSong?.id) ? 'is-favorite' : ''}`} onClick={toggleFavorite} aria-label={favorites.includes(currentSong?.id) ? '取消收藏' : '收藏歌曲'}><Icon name="heart" size={25} /></button>
           <div className="full-progress"><SeekBar value={progress} duration={effectiveDuration} disabled={loadingTrack || !trackReady} onSeek={seekTo} onPreview={setProgress} onSeekStart={beginSeek} onSeekCancel={cancelSeek} /><div><span>{formatTime(progress)}</span><span>{formatTime(effectiveDuration)}</span></div></div>
           <div className="full-controls">
