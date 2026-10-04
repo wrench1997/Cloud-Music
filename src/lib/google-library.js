@@ -10,7 +10,7 @@ function normalizeFolderPath(value) {
   return [ROOT_FOLDER, ...value.slice(1).map(({ id, name }) => ({ id, name }))];
 }
 
-async function openVerifiedGoogleLibrary(api, { readLocation = () => null, expectedEmail } = {}) {
+async function openVerifiedGoogleLibrary(api, { readLocation = () => null, expectedEmail, onVerifiedAccount = () => {} } = {}) {
   // Local bookmarks never establish identity. Check Google's authenticated account before reading them.
   const { user, storageQuota } = await api.getAccount();
   if (!user?.emailAddress || !user?.permissionId) throw new Error('无法验证 Google 账号，请重新登录。');
@@ -19,6 +19,8 @@ async function openVerifiedGoogleLibrary(api, { readLocation = () => null, expec
     throw Object.assign(new Error(`Google 返回了其他账号，请使用 ${expectedEmail.trim()} 重新登录。`), { code: 'GOOGLE_ACCOUNT_MISMATCH' });
   }
   const session = { provider: 'google', username: user.displayName || user.emailAddress, email: user.emailAddress, accountId: user.permissionId };
+  // Remember a Google-verified account before directory requests that may fail offline.
+  await onVerifiedAccount(session);
   let path = normalizeFolderPath(readLocation(session.accountId));
   let notice = '';
   let directory;

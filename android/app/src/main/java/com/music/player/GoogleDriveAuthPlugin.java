@@ -16,6 +16,7 @@ import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.ClearTokenRequest;
 import com.google.android.gms.auth.api.identity.Identity;
 import com.google.android.gms.common.AccountPicker;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
 import com.google.android.gms.tasks.Tasks;
 import com.google.android.gms.tasks.Task;
@@ -29,25 +30,24 @@ import java.util.concurrent.TimeUnit;
 public class GoogleDriveAuthPlugin extends Plugin {
     private static final List<String> DRIVE_SCOPES = Arrays.asList(
         "https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file");
-    private static volatile String accessToken;
-    private static volatile long expiresAt;
-    private static volatile String accountEmail;
-    private static volatile int accountGeneration;
+    private static final GoogleAuthSession session = new GoogleAuthSession();
     private GoogleAccountStore accountStore;
     private PluginCall pendingCall;
     private int pendingGeneration;
+    private int pendingTokenRevision;
 
     @Override
     public void load() {
         // The no-backup directory avoids carrying an account selection to another device via cloud backup.
         accountStore = new GoogleAccountStore(getContext().getNoBackupFilesDir());
-        if (accountEmail == null) accountEmail = accountStore.read();
+        session.initialize(accountStore.read());
     }
 
     @PluginMethod
     public void status(PluginCall call) {
-        call.resolve(new JSObject().put("configured", true).put("connected", accountEmail != null)
-            .put("remembersLogin", true).put("account", accountEmail));
+        String account = session.snapshot().account;
+        call.resolve(new JSObject().put("configured", true).put("connected", account != null)
+            .put("remembersLogin", true).put("account", account));
     }
 
     private static AuthorizationRequest request(String email) {
@@ -57,92 +57,125 @@ public class GoogleDriveAuthPlugin extends Plugin {
         return builder.build();
     }
 
-    private static synchronized String cache(AuthorizationResult result, int generation) throws IOException {
-        if (generation != accountGeneration) throw new IOException("Google 登录已取消。");
+    private static String cache(AuthorizationResult result, String email, int generation, int revision, boolean refreshOwner) throws IOException {
+        if (!session.isCurrent(generation)) throw GoogleAuthFailure.cancelled();
         String token = result.getAccessToken();
         if (token == null || !result.getGrantedScopes().containsAll(DRIVE_SCOPES)) {
-            throw new IOException("请允许读取 Google Drive 目录和音乐，以及保存应用曲库。");
+            throw GoogleAuthFailure.required();
         }
-        accessToken = token;
-        expiresAt = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(45);
-        return token;
+        return session.cache(email, token, System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(45), generation, revision, refreshOwner);
+    }
+
+    private static GoogleAuthFailure failure(Throwable error) {
+        return GoogleAuthFailure.from(error, current -> current instanceof ApiException ? ((ApiException) current).getStatusCode() : null);
+    }
+
+    private void reject(PluginCall call, int generation, Throwable error) {
+        GoogleAuthFailure reason = session.isCurrent(generation) ? failure(error) : GoogleAuthFailure.cancelled();
+        if (pendingCall == call) pendingCall = null;
+        if (Boolean.TRUE.equals(call.getBoolean("interactive", true))) session.cancelInteractive(generation);
+        call.reject(reason.getMessage(), reason.code, reason);
     }
 
     @PluginMethod
     public void signIn(PluginCall call) {
         boolean interactive = Boolean.TRUE.equals(call.getBoolean("interactive", true));
         String email = call.getString("account");
-        if (pendingCall != null) { call.reject("Google 登录正在进行，请稍候。"); return; }
+        if (pendingCall != null) { call.reject("Google 登录正在进行，请稍候。", "GOOGLE_AUTH_TEMPORARY"); return; }
+        int generation;
         if (interactive) {
-            try { accountStore.clear(); }
-            catch (IOException error) { call.reject("无法清除上一个 Google 账号。", error); return; }
-            accountGeneration++;
-            accessToken = null;
-            expiresAt = 0;
-            accountEmail = null;
+            // Keep the last verified selection until Drive confirms the new account in setAccount.
+            generation = session.beginInteractive();
             pendingCall = call;
-            pendingGeneration = accountGeneration;
+            pendingGeneration = generation;
+            pendingTokenRevision = session.snapshot().tokenRevision;
             if (email == null || email.isEmpty()) {
                 try {
                     Intent picker = AccountPicker.newChooseAccountIntent(new AccountPicker.AccountChooserOptions.Builder()
                         .setAllowableAccountsTypes(Collections.singletonList("com.google"))
                         .setAlwaysShowAccountPicker(true).build());
                     getActivity().startActivityForResult(picker, 9026);
-                } catch (Exception error) { pendingCall = null; call.reject("无法选择 Google 账号，请检查 Google Play 服务。", error); }
+                } catch (Exception error) { reject(call, generation, error); }
                 return;
             }
-        }
+        } else generation = session.snapshot().generation;
         if (!interactive) {
-            if (email == null || email.isEmpty()) email = accountEmail;
-            if (email == null || !email.equals(accountEmail)) {
-                call.reject("请重新连接 Google 账号。", "GOOGLE_AUTH_REQUIRED");
+            GoogleAuthSession.Snapshot saved = session.snapshot();
+            if (email == null || email.isEmpty()) email = saved.account;
+            if (email == null || saved.account == null || !email.equalsIgnoreCase(saved.account)) {
+                reject(call, generation, GoogleAuthFailure.required());
                 return;
             }
+            email = saved.account;
             call.getData().put("account", email);
+            String token = saved.validToken(System.currentTimeMillis());
+            if (!Boolean.TRUE.equals(call.getBoolean("force", false)) && token != null) {
+                call.resolve(new JSObject().put("accessToken", token));
+                return;
+            }
         }
-        if (!interactive && (email == null || email.equals(accountEmail)) && !Boolean.TRUE.equals(call.getBoolean("force", false))
-                && accessToken != null && expiresAt > System.currentTimeMillis()) {
-            call.resolve(new JSObject().put("accessToken", accessToken));
-            return;
-        }
-        int generation = accountGeneration;
         authorize(call, email, interactive, generation);
     }
 
     private void authorize(PluginCall call, String email, boolean interactive, int generation) {
-        AuthorizationClient client = Identity.getAuthorizationClient(getActivity());
-        Task<Void> cleared = Boolean.TRUE.equals(call.getBoolean("force", false)) && accessToken != null
-            ? client.clearToken(ClearTokenRequest.builder().setToken(accessToken).build()) : Tasks.forResult(null);
+        AuthorizationClient client;
+        Task<Void> cleared;
+        GoogleAuthSession.Snapshot authorization;
+        boolean ownsRefresh;
+        try {
+            client = Identity.getAuthorizationClient(getActivity());
+            GoogleAuthSession.Snapshot saved = session.snapshot();
+            if (saved.refreshPending) throw GoogleAuthFailure.temporary();
+            if (Boolean.TRUE.equals(call.getBoolean("force", false)) && saved.tokenToClear != null && saved.generation == generation) {
+                // A rejected token must not remain available to playback while clearToken is in flight.
+                authorization = session.beginTokenRefresh(saved.tokenToClear, generation);
+                ownsRefresh = true;
+                try { cleared = client.clearToken(ClearTokenRequest.builder().setToken(saved.tokenToClear).build()); }
+                catch (Exception error) { session.endTokenRefresh(generation, authorization.tokenRevision); throw error; }
+            } else {
+                authorization = saved;
+                ownsRefresh = false;
+                cleared = Tasks.forResult(null);
+            }
+        } catch (Exception error) { reject(call, generation, error); return; }
         cleared.continueWithTask(task -> {
-                if (!task.isSuccessful()) throw new IOException("无法刷新 Google 授权。", task.getException());
-                if (generation != accountGeneration) throw new IOException("Google 登录已取消。");
+                if (task.isCanceled()) throw interactive ? GoogleAuthFailure.cancelled() : GoogleAuthFailure.temporary();
+                if (!task.isSuccessful()) throw failure(task.getException());
+                if (!session.isCurrent(generation)) throw GoogleAuthFailure.cancelled();
                 return client.authorize(request(email));
             })
             .addOnSuccessListener(result -> {
-                if (generation != accountGeneration) { call.reject("Google 登录已取消。"); return; }
+                if (!session.isCurrent(generation)) { reject(call, generation, GoogleAuthFailure.cancelled()); return; }
                 if (result.hasResolution()) {
-                    if (!interactive) { call.reject("请重新连接 Google 账号。", "GOOGLE_AUTH_REQUIRED"); return; }
+                    session.endTokenRefresh(generation, authorization.tokenRevision);
+                    if (!interactive) { reject(call, generation, GoogleAuthFailure.required()); return; }
                     pendingCall = call;
                     pendingGeneration = generation;
+                    pendingTokenRevision = authorization.tokenRevision;
                     try {
                         getActivity().startIntentSenderForResult(result.getPendingIntent().getIntentSender(), 9027, null, 0, 0, 0);
-                    } catch (Exception error) { pendingCall = null; call.reject("无法打开 Google 授权窗口。", error); }
-                } else resolve(call, result, generation);
+                    } catch (Exception error) { reject(call, generation, error); }
+                } else resolve(call, result, generation, authorization.tokenRevision, ownsRefresh);
             }).addOnFailureListener(error -> {
-                if (pendingCall == call) pendingCall = null;
-                call.reject("Google 授权失败，请检查 Google Play 服务、应用 OAuth 配置和网络。", "GOOGLE_AUTH_REQUIRED", error);
+                if (ownsRefresh) session.endTokenRefresh(generation, authorization.tokenRevision);
+                reject(call, generation, error);
+            }).addOnCanceledListener(() -> {
+                if (ownsRefresh) session.endTokenRefresh(generation, authorization.tokenRevision);
+                reject(call, generation, interactive ? GoogleAuthFailure.cancelled() : GoogleAuthFailure.temporary());
             });
     }
 
-    private void resolve(PluginCall call, AuthorizationResult result, int generation) {
+    private void resolve(PluginCall call, AuthorizationResult result, int generation, int revision, boolean refreshOwner) {
         try {
             String email = call.getString("account");
-            String token = cache(result, generation);
-            if (email != null) accountEmail = email;
+            String token = cache(result, email, generation, revision, refreshOwner);
             call.resolve(new JSObject().put("accessToken", token));
         }
-        catch (IOException error) { call.reject(error.getMessage(), "GOOGLE_AUTH_REQUIRED", error); }
-        finally { if (pendingCall == call) pendingCall = null; }
+        catch (IOException error) { reject(call, generation, error); }
+        finally {
+            if (refreshOwner) session.endTokenRefresh(generation, revision);
+            if (pendingCall == call) pendingCall = null;
+        }
     }
 
     @Override
@@ -150,52 +183,63 @@ public class GoogleDriveAuthPlugin extends Plugin {
         if ((requestCode != 9026 && requestCode != 9027) || pendingCall == null) return;
         PluginCall call = pendingCall;
         pendingCall = null;
-        if (resultCode != Activity.RESULT_OK || data == null || pendingGeneration != accountGeneration) {
-            call.reject("Google 登录已取消。");
+        if (resultCode != Activity.RESULT_OK || data == null || !session.isCurrent(pendingGeneration)) {
+            reject(call, pendingGeneration, GoogleAuthFailure.cancelled());
             return;
         }
         if (requestCode == 9026) {
             String email = data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
-            if (email == null || email.isEmpty()) { call.reject("没有选择 Google 账号。"); return; }
+            if (email == null || email.isEmpty()) { reject(call, pendingGeneration, GoogleAuthFailure.cancelled()); return; }
             call.getData().put("account", email);
             pendingCall = call;
             authorize(call, email, true, pendingGeneration);
             return;
         }
-        try { resolve(call, Identity.getAuthorizationClient(getActivity()).getAuthorizationResultFromIntent(data), pendingGeneration); }
-        catch (Exception error) { call.reject("Google 授权未完成，请重试。", error); }
+        try { resolve(call, Identity.getAuthorizationClient(getActivity()).getAuthorizationResultFromIntent(data), pendingGeneration, pendingTokenRevision, false); }
+        catch (Exception error) { reject(call, pendingGeneration, error); }
     }
 
     @PluginMethod
     public void setAccount(PluginCall call) {
         String email = call.getString("email");
         try {
-            accountStore.write(email);
-            accountEmail = email;
+            synchronized (session) {
+                session.requireVerifiedAccount(email);
+                accountStore.write(email);
+                session.rememberVerifiedAccount(email);
+            }
             call.resolve();
-        } catch (IOException error) { call.reject(error.getMessage(), error); }
+        } catch (IOException error) {
+            if (error instanceof GoogleAuthFailure) {
+                GoogleAuthFailure reason = (GoogleAuthFailure) error;
+                call.reject(reason.getMessage(), reason.code, reason);
+            } else call.reject(error.getMessage(), "GOOGLE_ACCOUNT_SAVE_FAILED", error);
+        }
     }
 
     @PluginMethod
     public void signOut(PluginCall call) {
-        accountGeneration++;
-        accessToken = null;
-        expiresAt = 0;
-        accountEmail = null;
-        if (pendingCall != null) { pendingCall.reject("Google 登录已取消。"); pendingCall = null; }
+        session.clear();
+        if (pendingCall != null) { pendingCall.reject("Google 登录已取消。", "GOOGLE_LOGIN_CANCELLED"); pendingCall = null; }
         try { accountStore.clear(); call.resolve(); }
         catch (IOException error) { call.reject("无法清除已保存的 Google 账号。", error); }
     }
 
     // ExoPlayer calls this on its loading thread; Google Play services renews the in-memory token.
     public static String getPlaybackAccessToken(Context context) throws IOException {
-        if (accessToken != null && expiresAt > System.currentTimeMillis()) return accessToken;
-        if (accountEmail == null) throw new IOException("请重新连接 Google 账号。");
-        int generation = accountGeneration;
+        GoogleAuthSession.Snapshot saved = session.snapshot();
+        if (saved.refreshPending) throw GoogleAuthFailure.temporary();
+        String token = saved.validToken(System.currentTimeMillis());
+        if (token != null) return token;
+        if (saved.account == null) throw GoogleAuthFailure.required();
         try {
-            AuthorizationResult result = Tasks.await(Identity.getAuthorizationClient(context).authorize(request(accountEmail)), 30, TimeUnit.SECONDS);
-            if (generation != accountGeneration || result.hasResolution()) throw new IOException("请重新连接 Google 账号。");
-            return cache(result, generation);
-        } catch (Exception error) { throw new IOException("Google 曲库授权已失效，请重新连接账号。", error); }
+            AuthorizationResult result = Tasks.await(Identity.getAuthorizationClient(context).authorize(request(saved.account)), 30, TimeUnit.SECONDS);
+            if (!session.isCurrent(saved.generation)) throw GoogleAuthFailure.cancelled();
+            if (result.hasResolution()) throw GoogleAuthFailure.required();
+            return cache(result, saved.account, saved.generation, saved.tokenRevision, false);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw failure(error);
+        } catch (Exception error) { throw failure(error); }
     }
 }
