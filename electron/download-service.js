@@ -4,7 +4,17 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const os = require('node:os');
-const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, writeMp3Metadata } = require('./download-metadata');
+const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
+
+function searchOptions(value = {}) {
+  if (typeof value.query !== 'string' || value.query.length > 300) throw new Error('请输入 1 至 300 个字符的歌曲或歌手名称。');
+  const query = value.query.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (!query) throw new Error('请输入歌曲或歌手名称。');
+  const page = value.page === undefined ? 1 : value.page;
+  const limit = value.limit === undefined ? 12 : value.limit;
+  if (!Number.isInteger(page) || page < 1 || page > 5 || !Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('搜索每页最多 20 首，最多浏览 5 页。');
+  return { query, page, limit };
+}
 
 function parseSource(value) {
   let url;
@@ -134,6 +144,24 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     if (typeof entry.search !== 'string' || entry.search.length > 300) throw new Error('无效的歌曲搜索。');
     const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--', `ytsearch3:${entry.search}`]));
     return (data.entries || []).filter((item) => /^[\w-]{11}$/.test(item.id)).map((item) => ({ title: item.title, artist: item.uploader || item.channel || '', duration: Number(item.duration || 0), url: `https://www.youtube.com/watch?v=${item.id}` }));
+  }
+  async function search(value) {
+    const { query, page, limit } = searchOptions(value);
+    const start = (page - 1) * limit + 1;
+    const end = page * limit + 1;
+    const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-start', String(start), '--playlist-end', String(end), '--', `ytsearch${end}:${query}`]));
+    const seen = new Set();
+    const entries = (data.entries || []).filter((item) => {
+      if (!/^[\w-]{11}$/.test(item.id) || seen.has(item.id)) return false;
+      seen.add(item.id); return true;
+    });
+    return { provider: 'youtube', query, page, hasMore: page < 5 && entries.length > limit, entries: entries.slice(0, limit).map((item) => ({
+      title: String(item.track || item.title || item.id).slice(0, 300),
+      artist: String(item.artist || item.uploader || item.channel || '').slice(0, 300),
+      artistIsChannel: !item.artist, duration: Math.max(0, Number(item.duration) || 0),
+      coverUrl: safeCoverUrl(item.thumbnail) || (item.thumbnails || []).map((thumbnail) => safeCoverUrl(thumbnail.url)).find(Boolean) || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`,
+      url: `https://www.youtube.com/watch?v=${item.id}`, metadataProvider: 'youtube',
+    })), notice: '搜索和音源来自 YouTube。下载时读取实际歌曲信息并嵌入 MP3。' };
   }
   function publicJob(job) { return { id: job.id, createdAt: job.createdAt, state: job.state, title: job.title, progress: job.progress, phase: job.phase, completed: job.completed, total: job.total, failures: job.failures, error: job.error, files: job.files, metadataRepair: job.metadataRepair }; }
   function metadataOptions(job) { return { ffmpeg, fetchImpl, spawnProcess: metadataProcess, isCancelled: () => disposed || job.cancelled, onChild: (child, add) => add ? children.add(child) : children.delete(child) }; }
@@ -289,6 +317,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       if (request.method === 'GET' && url.pathname === '/status') { reply(response, 200, { ready: fs.existsSync(executable) && fs.existsSync(ffmpeg), jobs: [...jobs.values()].sort((left, right) => left.createdAt - right.createdAt).map(publicJob) }); return; }
       if (request.method === 'POST' && url.pathname === '/inspect') { reply(response, 200, await inspect((await readJson(request)).url)); return; }
       if (request.method === 'POST' && url.pathname === '/match') { reply(response, 200, await match(await readJson(request))); return; }
+      if (request.method === 'POST' && url.pathname === '/search') { reply(response, 200, await search(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/jobs') { reply(response, 200, startJob((await readJson(request)).entries)); return; }
       const jobRoute = url.pathname.match(/^\/jobs\/([\w-]+)$/);
       const retryRoute = url.pathname.match(/^\/jobs\/([\w-]+)\/retry$/);
@@ -354,7 +383,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     delete request.headers.origin;
     return handle(request, response);
   }
-  return { connect, inspect, match, startJob, repairJob, dispose, handleLocal };
+  return { connect, inspect, match, search, startJob, repairJob, dispose, handleLocal };
 }
 
-module.exports = { createDownloadService, parseSource, parseSpotifyMetadata };
+module.exports = { createDownloadService, parseSource, parseSpotifyMetadata, searchOptions };

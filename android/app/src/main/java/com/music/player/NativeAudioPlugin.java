@@ -107,6 +107,8 @@ public class NativeAudioPlugin extends Plugin {
             intent.putExtra("position", call.getLong("position", 0L));
         } else if (MusicService.ACTION_REPEAT.equals(action)) {
             intent.putExtra("mode", call.getInt("mode", 0));
+        } else if (MusicService.ACTION_SHUFFLE.equals(action)) {
+            intent.putExtra("enabled", call.getBoolean("enabled", false));
         } else if (MusicService.ACTION_VOLUME.equals(action)) {
             intent.putExtra("volume", call.getFloat("volume", 1f));
         }
@@ -156,6 +158,11 @@ public class NativeAudioPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setShuffleMode(PluginCall call) {
+        command(MusicService.ACTION_SHUFFLE, call);
+    }
+
+    @PluginMethod
     public void next(PluginCall call) {
         command(MusicService.ACTION_NEXT, call);
     }
@@ -175,16 +182,26 @@ public class NativeAudioPlugin extends Plugin {
         getActivity().runOnUiThread(() -> {
             MusicService service = MusicService.getInstance();
             if (service == null) {
-                call.resolve(new JSObject().put("playing", false).put("position", 0).put("duration", 0).put("index", -1));
+                Bundle saved = MusicService.getSavedPlaybackMode(getContext());
+                call.resolve(new JSObject().put("playing", false).put("playWhenReady", false)
+                    .put("buffering", false).put("ended", false).put("seekable", false)
+                    .put("position", 0).put("duration", 0).put("bufferedPosition", 0).put("index", -1)
+                    .put("repeatMode", saved.getInt("repeatMode")).put("shuffleEnabled", saved.getBoolean("shuffleEnabled")));
                 return;
             }
             Bundle state = service.getPlaybackStateBundle();
             JSObject result = new JSObject();
             result.put("playing", state.getBoolean("playing"));
+            result.put("playWhenReady", state.getBoolean("playWhenReady"));
+            result.put("buffering", state.getBoolean("buffering"));
+            result.put("ended", state.getBoolean("ended"));
+            result.put("seekable", state.getBoolean("seekable"));
             result.put("position", state.getLong("position"));
             result.put("duration", state.getLong("duration"));
+            result.put("bufferedPosition", state.getLong("bufferedPosition"));
             result.put("index", state.getInt("index"));
             result.put("repeatMode", state.getInt("repeatMode"));
+            result.put("shuffleEnabled", state.getBoolean("shuffleEnabled"));
             result.put("error", state.getString("error"));
             call.resolve(result);
         });

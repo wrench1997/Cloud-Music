@@ -1,0 +1,89 @@
+.discovery { min-width: 0; }
+.hero { display: flex; align-items: center; gap: 18px; padding: 26px; border-radius: 24px; background: linear-gradient(125deg, #fff1ed, #ffe4e9 60%, #f2e9ff); }
+.hero h2 { margin: 5px 0 8px; font-size: 30px; font-weight: 800; }
+.hero p { margin: 0; color: #78545b; line-height: 1.65; }
+.hero > div { flex: 1; }
+.hero > button { flex-shrink: 0; min-height: 50px; padding: 14px 24px; border-radius: 25px; box-shadow: 0 5px 15px #ef567733; }
+.sparkle { font-size: 44px; color: #e45a78; }
+.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: #bc4b6e; }
+.seedHeader { margin: 24px 0 12px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.seedHeader h3 { margin: 0; font-size: 18px; }
+.seedHeader > span { font-size: 12px; color: #888; }
+.seeds { display: flex; flex-wrap: wrap; gap: 10px; }
+.seeds button { min-height: 66px; min-width: 0; padding: 12px 17px; text-align: left; overflow-wrap: anywhere; border: 1px solid #f0dfe5; border-radius: 17px; background: #fff; transition: background .15s, transform .15s; }
+.seeds button:hover { transform: translateY(-1px); background: #fff5f7; }
+.seeds button[aria-pressed='true'] { background: #ffecef; border-color: #eb97ac; color: #ac4262; }
+.seeds b, .seeds small { display: block; }
+.seeds small { margin-top: 5px; color: #867a7e; font-size: 11px; }
+.searchForm { display: flex; gap: 12px; align-items: end; margin-top: 24px; }
+.searchForm label { flex: 1; min-width: 0; font-size: 13px; }
+.searchForm input { display: block; box-sizing: border-box; width: 100%; margin-top: 8px; min-height: 50px; border: 1px solid #e1dce0; border-radius: 15px; padding: 14px 16px; background: #fff; font-size: 15px; }
+.searchForm input:focus { outline: 2px solid #eeadb9; outline-offset: 2px; }
+.searchForm > button { min-height: 50px; padding: 13px 23px; border-radius: 16px; }
+.platformLinks { display: flex; gap: 18px; flex-wrap: wrap; margin: 16px 0 20px; font-size: 13px; color: #6f5b80; }
+.platformLinks a { min-height: 44px; display: inline-flex; align-items: center; }
+.connectionHint { padding: 14px 17px; border-radius: 15px; background: #fff3df; color: #8f681e; line-height: 1.6; }
+.resultHeader { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-top: 20px; }
+.resultHeader h3 { font-size: 18px; margin: 0 0 6px; }
+.resultHeader h3 small { color: #8c7c84; font-size: 12px; font-weight: 400; }
+.resultHeader p { font-size: 12px; color: #9a798a; margin: 0; }
+.resultHeader label { flex-shrink: 0; font-size: 12px; display: flex; align-items: center; gap: 7px; min-height: 44px; }
+.sourceHint, .privacy { font-size: 12px; color: #888; line-height: 1.7; }
+.track { display: flex; align-items: center; gap: 15px; padding: 16px 0; border-bottom: 1px solid #eee8ec; }
+.trackChoice { display: flex; flex: 1; align-items: center; gap: 13px; min-width: 0; }
+.cover { flex-shrink: 0; width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; border-radius: 17px; background: #fde7ec; color: #cf6786; overflow: hidden; font-size: 25px; }
+.cover img { width: 100%; height: 100%; object-fit: cover; }
+.trackText { min-width: 0; }
+.trackText b { font-size: 14px; line-height: 1.5; display: block; overflow-wrap: anywhere; }
+.trackText small { display: block; color: #888; font-size: 11px; line-height: 1.6; margin-top: 4px; }
+.trackText .reason { color: #ae607e; }
+.trackActions { display: flex; gap: 8px; flex-shrink: 0; }
+.trackActions button { min-height: 44px; border-radius: 22px; padding: 10px 15px; font-size: 12px; }
+.downloadBar, .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 0; }
+.downloadBar { font-size: 13px; }
+.downloadBar button { min-height: 48px; padding: 12px 24px; border-radius: 24px; }
+.pagination { justify-content: center; font-size: 12px; }
+.pagination button { min-height: 44px; padding: 10px 17px; }
+.preview { padding: 15px; border: 1px solid #e5d4dc; border-radius: 20px; background: #fff; margin-top: 18px; }
+.preview > div { display: flex; justify-content: space-between; align-items: center; gap: 15px; font-size: 13px; }
+.preview button { min-width: 44px; min-height: 44px; font-size: 22px; }
+.preview iframe { width: 100%; border: 0; border-radius: 14px; aspect-ratio: 16 / 9; }
+.spotify { background: #f5f9f6; padding: 20px; margin-top: 26px; border: 1px solid #deece2; border-radius: 22px; }
+.spotify h3 { margin: 0 0 8px; font-size: 18px; }
+.spotify > p { color: #6e7d73; font-size: 13px; line-height: 1.7; }
+.savedPlaylists { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.savedPlaylists button { min-height: 44px; }
+.spotifyTracks { max-height: 500px; overflow: auto; }
+.spotifyTracks > div { display: flex; gap: 12px; justify-content: space-between; padding: 15px 0; border-top: 1px solid #dfe8e2; }
+.spotifyTracks b, .spotifyTracks small { display: block; }
+.spotifyTracks b { font-size: 13px; overflow-wrap: anywhere; }
+.spotifyTracks small { font-size: 11px; margin-top: 6px; color: #7a8b80; }
+.spotifyTracks > div > div { display: flex; align-items: center; flex-shrink: 0; gap: 10px; font-size: 12px; }
+.spotifyTracks button { min-height: 44px; }
+.empty { color: #888; padding: 20px 0; font-size: 13px; }
+.privacy { margin-top: 20px; }
+
+@media (max-width: 760px) {
+  .hero { flex-wrap: wrap; padding: 22px 18px; gap: 12px; }
+  .hero h2 { font-size: 27px; }
+  .hero p { font-size: 13px; }
+  .hero .sparkle { font-size: 34px; }
+  .hero > div { flex-basis: calc(100% - 50px); }
+  .hero > button { width: 100%; }
+  .seeds { gap: 8px; }
+  .seeds button { flex: 1 1 40%; padding: 12px 13px; }
+  .seeds small { font-size: 10px; }
+  .searchForm { flex-wrap: wrap; }
+  .searchForm label { flex-basis: 100%; }
+  .searchForm > button { width: 100%; }
+  .resultHeader { flex-wrap: wrap; gap: 4px; }
+  .track { flex-wrap: wrap; gap: 10px; }
+  .trackChoice { flex-basis: 100%; gap: 10px; }
+  .cover { width: 62px; height: 62px; border-radius: 15px; }
+  .trackActions { width: 100%; justify-content: flex-end; }
+  .trackActions button { min-width: 86px; }
+  .spotify { padding: 18px 15px; }
+  .spotifyTracks > div { flex-wrap: wrap; }
+  .spotifyTracks > div > div { justify-content: flex-end; width: 100%; }
+  .preview { padding: 10px; }
+}

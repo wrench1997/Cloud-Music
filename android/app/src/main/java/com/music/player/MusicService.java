@@ -1,6 +1,7 @@
 package com.music.player;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -31,12 +32,14 @@ import org.json.JSONObject;
 public class MusicService extends MediaSessionService {
     private static final String CHANNEL_ID = "yungan_playback";
     private static final int NOTIFICATION_ID = 2026;
+    private static final String PLAYBACK_PREFERENCES = "playback_preferences";
     public static final String ACTION_QUEUE = "com.music.player.QUEUE";
     public static final String ACTION_PLAY = "com.music.player.PLAY";
     public static final String ACTION_PAUSE = "com.music.player.PAUSE";
     public static final String ACTION_STOP = "com.music.player.STOP";
     public static final String ACTION_SEEK = "com.music.player.SEEK";
     public static final String ACTION_REPEAT = "com.music.player.REPEAT";
+    public static final String ACTION_SHUFFLE = "com.music.player.SHUFFLE";
     public static final String ACTION_NEXT = "com.music.player.NEXT";
     public static final String ACTION_PREVIOUS = "com.music.player.PREVIOUS";
     public static final String ACTION_VOLUME = "com.music.player.VOLUME";
@@ -45,6 +48,8 @@ public class MusicService extends MediaSessionService {
     private ExoPlayer player;
     private MediaSession mediaSession;
     private String playbackError;
+    private final List<Long> durationHints = new ArrayList<>();
+    private SharedPreferences playbackPreferences;
 
     public static MusicService getInstance() {
         return instance;
@@ -66,6 +71,11 @@ public class MusicService extends MediaSessionService {
         });
         player = new ExoPlayer.Builder(this).setMediaSourceFactory(new DefaultMediaSourceFactory(authorizedSource)).build();
         player.setHandleAudioBecomingNoisy(true);
+        playbackPreferences = getSharedPreferences(PLAYBACK_PREFERENCES, MODE_PRIVATE);
+        int savedRepeatMode = PlaybackPolicy.repeatMode(playbackPreferences.getInt("repeatMode", Player.REPEAT_MODE_OFF));
+        boolean savedShuffle = PlaybackPolicy.shuffleEnabled(savedRepeatMode, playbackPreferences.getBoolean("shuffleEnabled", false));
+        player.setRepeatMode(savedRepeatMode);
+        player.setShuffleModeEnabled(savedShuffle);
         mediaSession = new MediaSession.Builder(this, player).build();
         createNotificationChannel();
         player.addListener(new Player.Listener() {
@@ -79,8 +89,31 @@ public class MusicService extends MediaSessionService {
             }
 
             @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                if (player.getMediaItemCount() > 0) updateNotification();
+            }
+
+            @Override
+            public void onPlaybackStateChanged(int playbackState) {
+                if (player.getMediaItemCount() > 0) updateNotification();
+            }
+
+            @Override
             public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
                 if (mediaItem != null) updateNotification();
+            }
+
+            @Override
+            public void onRepeatModeChanged(int repeatMode) {
+                // Our four modes are mutually exclusive, including changes from system controls.
+                if (repeatMode != Player.REPEAT_MODE_ALL && player.getShuffleModeEnabled()) player.setShuffleModeEnabled(false);
+                playbackPreferences.edit().putInt("repeatMode", PlaybackPolicy.repeatMode(repeatMode)).apply();
+            }
+
+            @Override
+            public void onShuffleModeEnabledChanged(boolean shuffleModeEnabled) {
+                if (shuffleModeEnabled && player.getRepeatMode() != Player.REPEAT_MODE_ALL) player.setRepeatMode(Player.REPEAT_MODE_ALL);
+                playbackPreferences.edit().putBoolean("shuffleEnabled", shuffleModeEnabled).apply();
             }
         });
     }
@@ -93,6 +126,7 @@ public class MusicService extends MediaSessionService {
                     loadQueue(intent.getStringExtra("tracks"), intent.getIntExtra("index", 0), intent.getLongExtra("position", 0));
                     break;
                 case ACTION_PLAY:
+                    if (player.getPlaybackState() == Player.STATE_ENDED) player.seekTo(0L);
                     player.play();
                     break;
                 case ACTION_PAUSE:
@@ -101,22 +135,35 @@ public class MusicService extends MediaSessionService {
                 case ACTION_STOP:
                     player.stop();
                     player.clearMediaItems();
+                    durationHints.clear();
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
                     break;
                 case ACTION_SEEK:
-                    player.seekTo(intent.getLongExtra("position", 0));
+                    if (player.getMediaItemCount() > 0) {
+                        // ExoPlayer retains seeks during prepare/buffering and resumes from that position.
+                        player.seekTo(PlaybackPolicy.seekPosition(intent.getLongExtra("position", 0), currentDuration()));
+                    }
                     break;
                 case ACTION_REPEAT:
-                    player.setRepeatMode(intent.getIntExtra("mode", Player.REPEAT_MODE_OFF));
+                    player.setRepeatMode(PlaybackPolicy.repeatMode(intent.getIntExtra("mode", Player.REPEAT_MODE_OFF)));
+                    break;
+                case ACTION_SHUFFLE:
+                    player.setShuffleModeEnabled(intent.getBooleanExtra("enabled", false));
                     break;
                 case ACTION_NEXT:
-                    player.seekToNextMediaItem();
-                    player.play();
+                    if (player.getMediaItemCount() > 0) {
+                        if (player.hasNextMediaItem()) player.seekToNextMediaItem();
+                        else player.seekTo(0, 0);
+                        player.play();
+                    }
                     break;
                 case ACTION_PREVIOUS:
-                    player.seekToPreviousMediaItem();
-                    player.play();
+                    if (player.getMediaItemCount() > 0) {
+                        if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem();
+                        else player.seekTo(player.getMediaItemCount() - 1, 0);
+                        player.play();
+                    }
                     break;
                 case ACTION_VOLUME:
                     player.setVolume(Math.max(0f, Math.min(1f, intent.getFloatExtra("volume", 1f))));
@@ -135,6 +182,7 @@ public class MusicService extends MediaSessionService {
             if (array.length() == 0) return;
             playbackError = null;
             List<MediaItem> items = new ArrayList<>();
+            List<Long> hints = new ArrayList<>();
             for (int i = 0; i < array.length(); i++) {
                 JSONObject track = array.getJSONObject(i);
                 MediaMetadata.Builder metadata = new MediaMetadata.Builder()
@@ -148,12 +196,19 @@ public class MusicService extends MediaSessionService {
                     .setUri(track.getString("url"))
                     .setMediaMetadata(metadata.build())
                     .build());
+                long suppliedDuration = track.optLong("durationMillis", 0);
+                hints.add(suppliedDuration > 0 ? suppliedDuration : PlaybackPolicy.secondsToMillis(track.optDouble("duration", 0)));
             }
-            player.setMediaItems(items, Math.max(0, Math.min(index, items.size() - 1)), Math.max(0, position));
+            int startIndex = Math.max(0, Math.min(index, items.size() - 1));
+            durationHints.clear();
+            durationHints.addAll(hints);
+            // Replacing the queue keeps the player's repeat and shuffle preferences intact.
+            player.setMediaItems(items, startIndex, PlaybackPolicy.seekPosition(position, hints.get(startIndex)));
             player.prepare();
             player.play();
             updateNotification();
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            playbackError = "无法打开播放队列，请重新选择歌曲。";
         }
     }
 
@@ -175,8 +230,9 @@ public class MusicService extends MediaSessionService {
         MediaMetadata metadata = player.getMediaMetadata();
         Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 10, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        int playIcon = player.isPlaying() ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play;
-        String playAction = player.isPlaying() ? ACTION_PAUSE : ACTION_PLAY;
+        boolean playbackRequested = player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED && playbackError == null;
+        int playIcon = playbackRequested ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play;
+        String playAction = playbackRequested ? ACTION_PAUSE : ACTION_PLAY;
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music_notification)
             .setContentTitle(metadata.title == null ? "云感音乐" : metadata.title)
@@ -184,9 +240,9 @@ public class MusicService extends MediaSessionService {
             .setContentIntent(contentIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
-            .setOngoing(player.isPlaying())
+            .setOngoing(playbackRequested)
             .addAction(android.R.drawable.ic_media_previous, "上一首", serviceAction(ACTION_PREVIOUS, 11))
-            .addAction(playIcon, player.isPlaying() ? "暂停" : "播放", serviceAction(playAction, 12))
+            .addAction(playIcon, playbackRequested ? "暂停" : "播放", serviceAction(playAction, 12))
             .addAction(android.R.drawable.ic_media_next, "下一首", serviceAction(ACTION_NEXT, 13))
             .setStyle(new MediaStyle().setShowActionsInCompactView(0, 1, 2));
         startForeground(NOTIFICATION_ID, builder.build());
@@ -195,12 +251,35 @@ public class MusicService extends MediaSessionService {
     public Bundle getPlaybackStateBundle() {
         Bundle result = new Bundle();
         result.putBoolean("playing", player.isPlaying());
-        result.putLong("position", Math.max(0, player.getCurrentPosition()));
-        result.putLong("duration", Math.max(0, player.getDuration()));
-        result.putInt("index", player.getCurrentMediaItemIndex());
+        result.putBoolean("playWhenReady", player.getPlayWhenReady());
+        result.putBoolean("buffering", player.getPlaybackState() == Player.STATE_BUFFERING);
+        result.putBoolean("ended", player.getPlaybackState() == Player.STATE_ENDED);
+        long duration = currentDuration();
+        result.putLong("position", PlaybackPolicy.seekPosition(player.getCurrentPosition(), duration));
+        result.putLong("duration", duration);
+        result.putLong("bufferedPosition", PlaybackPolicy.seekPosition(player.getBufferedPosition(), duration));
+        result.putBoolean("seekable", player.getMediaItemCount() > 0 && (player.isCurrentMediaItemSeekable()
+            || (!player.isCurrentMediaItemLive() && player.getDuration() <= 0 && duration > 0)));
+        result.putInt("index", player.getMediaItemCount() > 0 ? player.getCurrentMediaItemIndex() : -1);
         result.putInt("repeatMode", player.getRepeatMode());
+        result.putBoolean("shuffleEnabled", player.getShuffleModeEnabled());
         result.putString("error", playbackError);
         return result;
+    }
+
+    private long currentDuration() {
+        int index = player.getCurrentMediaItemIndex();
+        long hint = index >= 0 && index < durationHints.size() ? durationHints.get(index) : 0;
+        return PlaybackPolicy.duration(player.getDuration(), hint);
+    }
+
+    public static Bundle getSavedPlaybackMode(android.content.Context context) {
+        SharedPreferences preferences = context.getSharedPreferences(PLAYBACK_PREFERENCES, MODE_PRIVATE);
+        Bundle state = new Bundle();
+        int repeatMode = PlaybackPolicy.repeatMode(preferences.getInt("repeatMode", Player.REPEAT_MODE_OFF));
+        state.putInt("repeatMode", repeatMode);
+        state.putBoolean("shuffleEnabled", PlaybackPolicy.shuffleEnabled(repeatMode, preferences.getBoolean("shuffleEnabled", false)));
+        return state;
     }
 
     @Override
