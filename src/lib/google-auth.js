@@ -7,6 +7,7 @@ import { createGoogleTokenRequester } from './google-web-token';
 const GoogleDriveAuth = registerPlugin('GoogleDriveAuth');
 const WEB_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
 const WEB_CONFIG_KEY = 'yungan-google-web-client';
+const WEB_ACCOUNT_KEY = 'yungan-google-web-account';
 let webClientId = WEB_CLIENT_ID;
 let identityPromise;
 let tokenClient;
@@ -52,8 +53,13 @@ function loadGoogleIdentity() {
 export async function prepareGoogleSignIn() {
   if (window.electronAPI?.google) return window.electronAPI.google.status();
   if (Capacitor.isNativePlatform()) return GoogleDriveAuth.status();
+  let account;
+  try {
+    const preferred = localStorage.getItem(WEB_ACCOUNT_KEY);
+    if (typeof preferred === 'string' && preferred.trim()) account = preferred.trim();
+  } catch {}
   try { webClientId = localStorage.getItem(WEB_CONFIG_KEY) || WEB_CLIENT_ID; } catch {}
-  if (!webClientId) return { configured: false };
+  if (!webClientId) return { configured: false, account };
   webClientId = validateWebClientId(webClientId);
   const saved = readWebSession(browserSessionStorage(), webClientId);
   webToken = saved?.accessToken;
@@ -62,7 +68,7 @@ export async function prepareGoogleSignIn() {
   if (!tokenClient) {
     tokenClient = createWebTokenClient(webClientId);
   }
-  return { configured: true, connected: Boolean(webToken), remembersLogin: true };
+  return { configured: true, connected: Boolean(webToken), remembersLogin: true, account };
 }
 
 export function connectGoogle({ interactive = true, account } = {}) {
@@ -86,6 +92,14 @@ export async function getGoogleAccessToken({ force = false, account } = {}) {
 
 export async function selectGoogleAccount(email) {
   if (Capacitor.isNativePlatform()) await GoogleDriveAuth.setAccount({ email });
+  else if (!window.electronAPI?.google) {
+    // This is only a chooser hint, saved after the Drive API verifies the email.
+    const account = typeof email === 'string' ? email.trim() : '';
+    try {
+      if (account) localStorage.setItem(WEB_ACCOUNT_KEY, account);
+      else localStorage.removeItem(WEB_ACCOUNT_KEY);
+    } catch {}
+  }
 }
 
 export async function disconnectGoogle() {
@@ -93,6 +107,9 @@ export async function disconnectGoogle() {
   webToken = undefined;
   webExpiresAt = 0;
   clearWebSession(browserSessionStorage());
+  if (!window.electronAPI?.google && !Capacitor.isNativePlatform()) {
+    try { localStorage.removeItem(WEB_ACCOUNT_KEY); } catch {}
+  }
   if (window.electronAPI?.google) await window.electronAPI.google.signOut();
   else if (Capacitor.isNativePlatform()) await GoogleDriveAuth.signOut();
 }

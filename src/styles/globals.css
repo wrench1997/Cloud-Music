@@ -193,6 +193,7 @@ input[type=range] { height:3px; accent-color:var(--red); cursor:pointer; }
 .cloud-benefits p { margin:9px 0; }.cloud-benefits p::before { margin-right:9px; color:#35a767; content:'✓'; }
 .google-button { display:flex; align-items:center; justify-content:center; gap:12px; width:100%; min-height:44px; padding:10px; border:1px solid #dadce0; border-radius:8px; color:#3c4043; background:#fff; font-weight:500; }
 .google-button:hover { background:#f7f9ff; }.google-button svg,.drive-status svg { flex:0 0 auto; }
+.google-login label { margin:0 0 12px; }
 button:disabled { cursor:not-allowed; opacity:.55; }
 .config-button { display:block; margin:15px auto 0; color:#777; font-size:12px; text-decoration:underline; text-underline-offset:3px; }
 .setup-hint { margin:15px 0 0; color:#777; font-size:12px; line-height:1.7; }

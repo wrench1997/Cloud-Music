@@ -56,7 +56,7 @@ function GoogleLogo() {
   return <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.8 3-4.3 3-7.4Z" /><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.7-5.6-4H3.1v2.6A10 10 0 0 0 12 22Z" /><path fill="#FBBC05" d="M6.4 14.1a6 6 0 0 1 0-4.2V7.3H3.1a10 10 0 0 0 0 9.4l3.3-2.6Z" /><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.9 5.3l3.3 2.6A6 6 0 0 1 12 5.9Z" /></svg>;
 }
 
-function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, busy, error }) {
+function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, loginEmail, onLoginEmail, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, busy, error }) {
   const [configText, setConfigText] = useState('');
   const submitConfig = async (event) => {
     event.preventDefault();
@@ -71,6 +71,7 @@ function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, 
         <p className="login-hint">验证你的 Google 账号后，进入 Drive 文件夹，选择自己的音乐播放。</p>
         <ol className="login-steps"><li><span>1</span>Google 登录验证</li><li><span>2</span>打开音乐目录</li><li><span>3</span>选歌播放</li></ol>
         <div className="google-login">
+          {googleReady && !isDesktop && !isNative && <label>Google 账号邮箱（可选）<input type="email" value={loginEmail} onChange={(event) => onLoginEmail(event.target.value)} placeholder="填写要连接的 Google 账号，留空可选择账号" disabled={busy} autoComplete="email" /></label>}
           <button className="google-button" onClick={onGoogleLogin} disabled={busy || !googleReady}><GoogleLogo />{busy ? '正在连接 Google…' : !googleReady ? '正在准备 Google 登录…' : '使用 Google 账号登录'}</button>
           {googleReady && !googleConfigured && <p className="setup-hint">首次连接需要一次 Google 应用配置。点击登录会打开 Google 官方设置页面，完成后就能进入音乐目录。</p>}
           <div className="config-actions">
@@ -132,6 +133,7 @@ export default function Home() {
   const [driveApi, setDriveApi] = useState(null);
   const [googleReady, setGoogleReady] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
   const [isDesktop, setIsDesktop] = useState(false);
   const [showGoogleSetup, setShowGoogleSetup] = useState(false);
   const [setupMessage, setSetupMessage] = useState('');
@@ -328,6 +330,7 @@ export default function Home() {
         return token;
       });
       const { session, storageQuota: quota, path, directory, remoteState, notice, stateError } = await openVerifiedGoogleLibrary(nextApi, {
+        expectedEmail: account,
         readLocation: (accountId) => {
           try { return JSON.parse(localStorage.getItem(locationKey(accountId)) || 'null'); } catch { return null; }
         },
@@ -336,6 +339,7 @@ export default function Home() {
       email = session.email;
       await selectGoogleAccount(email);
       if (generation !== sessionGenerationRef.current) return;
+      setLoginEmail(email);
       const cached = readCachedState(session);
       const state = normalizeState(cached?.dirty || !remoteState ? cached : remoteState);
       localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: Boolean(cached?.dirty) }));
@@ -356,6 +360,7 @@ export default function Home() {
         }
       }
     } catch (requestError) {
+      if (generation === sessionGenerationRef.current && requestError.code === 'GOOGLE_ACCOUNT_MISMATCH') await disconnectGoogle().catch(() => {});
       if (requestError.code === 'GOOGLE_CONFIG_REQUIRED') setShowGoogleSetup(true);
       if (generation === sessionGenerationRef.current) setError(requestError.message);
     } finally {
@@ -399,7 +404,7 @@ export default function Home() {
   };
 
   const beginGoogleLogin = () => {
-    if (googleConfigured) return googleLogin();
+    if (googleConfigured) return googleLogin({ account: !isDesktop && !isNative ? loginEmail.trim() || undefined : undefined });
     setShowGoogleSetup(true);
     return openSetup();
   };
@@ -415,6 +420,7 @@ export default function Home() {
       setIsDesktop(Boolean(window.electronAPI?.google));
       setGoogleReady(true);
       setGoogleConfigured(status.configured);
+      if (typeof status.account === 'string') setLoginEmail(status.account);
       if (status.connected && !startupLoginRef.current) {
         startupLoginRef.current = true;
         googleLoginRef.current({ interactive: false, account: status.account });
@@ -580,6 +586,7 @@ export default function Home() {
   };
 
   const logout = async () => {
+    setLoginEmail('');
     const previousApi = api;
     const previousGoogle = isGoogle;
     ++sessionGenerationRef.current;
@@ -710,7 +717,7 @@ export default function Home() {
     return song;
   } : null;
   if (showOnlinePlaylists) return <OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={uploadDownloadedMp3} uploadAccount={credentials?.accountId || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} />;
-  if (!credentials) return <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />;
+  if (!credentials) return <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />;
 
   const navItems = [
     ['云端曲库', 'folder'], ['我的收藏', 'heart'], ['最近播放', 'history'],
