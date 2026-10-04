@@ -70,7 +70,7 @@ jobs:
       - name: Install bundled media tools and build Windows
         shell: pwsh
         run: |
-          npm run media:install
+          & ./scripts/install-media-tools.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Media tools failed' }
           npm run icons
           npm run build
