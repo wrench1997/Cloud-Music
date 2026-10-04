@@ -31,6 +31,8 @@ const icons = {
   next: 'M16 5h2v14h-2V5ZM6 19V5l9 7-9 7Z',
   volume: 'M4 9h4l5-4v14l-5-4H4V9Zm12.5-1.8a7 7 0 0 1 0 9.6l-1.4-1.4a5 5 0 0 0 0-6.8l1.4-1.4Z',
   list: 'M5 6h14v2H5V6Zm0 5h14v2H5v-2Zm0 5h14v2H5v-2Z',
+  order: 'M4 6h11V3l5 4-5 4V8H4V6Zm0 10h11v-3l5 4-5 4v-3H4v-2Z',
+  queue: 'M4 5h16v2H4V5Zm0 5h16v2H4v-2Zm0 5h9v2H4v-2Zm12-1 6 4-6 4v-8Z',
   refresh: 'M18.6 6.4A8 8 0 1 0 20 15h-2.1A6 6 0 1 1 17 8l-3 3h7V4l-2.4 2.4Z',
   upload: 'M11 15V7L8 10 6.6 8.6 12 3.2l5.4 5.4L16 10l-3-3v8h-2ZM4 16h2v3h12v-3h2v5H4v-5Z',
   logout: 'M10 4H4v16h6v-2H6V6h4V4Zm4.6 3.6L13.2 9l2 2H9v2h6.2l-2 2 1.4 1.4L19 12l-4.4-4.4Z',
@@ -1099,7 +1101,7 @@ export default function Home() {
             <input aria-label="音量调节" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
             <span>{Math.round(volume * 100)}%</span>
           </div>
-          <button onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="list" size={19} /></button>
+          <button className="queue-tool" onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="queue" size={20} /><span className="queue-label">队列</span></button>
         </div>
         {!isNative && <audio ref={audioRef} src={audioSrc || undefined} autoPlay={Boolean(audioSrc)} loop={playMode === 'repeat-one'} onTimeUpdate={(event) => updatePlaybackPosition(event.currentTarget.currentTime || 0)} onLoadedMetadata={(event) => { if (Number.isFinite(event.currentTarget.duration) && event.currentTarget.duration > 0) setDuration(event.currentTarget.duration); }} onEnded={() => playOffset(1, true)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onError={() => { if (audioSrc) { setIsPlaying(false); setError('无法播放这首歌曲，请检查网络、Google 授权或音频格式。'); } }} />}
       </footer>
@@ -1118,7 +1120,7 @@ export default function Home() {
             <button onClick={playPrevious} aria-label="上一首" disabled={!currentSong || loadingTrack}><Icon name="previous" size={28} /></button>
             <button className="full-play" onClick={togglePlay} disabled={!currentSong || loadingTrack} aria-label={isPlaying ? '暂停' : '播放'}><Icon name={isPlaying ? 'pause' : 'play'} size={31} /></button>
             <button onClick={playNext} aria-label="下一首" disabled={!currentSong || loadingTrack}><Icon name="next" size={28} /></button>
-            <button onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="list" size={23} /></button>
+            <button className="queue-tool" onClick={() => setShowQueue(true)} aria-label="播放队列"><Icon name="queue" size={23} /><span className="queue-label">队列</span></button>
           </div>
         </section>
       )}

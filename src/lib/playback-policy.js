@@ -1,5 +1,5 @@
 const PLAYBACK_MODES = [
-  { id: 'order', label: '顺序播放', repeat: 0, shuffle: false, icon: 'list' },
+  { id: 'order', label: '顺序播放', repeat: 0, shuffle: false, icon: 'order' },
   { id: 'repeat-all', label: '列表循环', repeat: 2, shuffle: false, icon: 'repeat' },
   { id: 'repeat-one', label: '单曲循环', repeat: 1, shuffle: false, icon: 'repeat' },
   { id: 'shuffle', label: '随机播放', repeat: 2, shuffle: true, icon: 'shuffle' },
