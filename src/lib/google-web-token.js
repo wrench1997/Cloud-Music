@@ -15,6 +15,7 @@ function createGoogleTokenRequester({ oauth2, clientId, scopes, onToken, timeout
 
   function signIn({ account } = {}) {
     if (pending) return pending.promise;
+    const accountHint = typeof account === 'string' ? account.trim() : '';
     const attempt = { active: true };
     attempt.promise = new Promise((resolve, reject) => { attempt.resolve = resolve; attempt.reject = reject; });
     pending = attempt;
@@ -49,7 +50,7 @@ function createGoogleTokenRequester({ oauth2, clientId, scopes, onToken, timeout
         },
         error_callback: (error) => finish(popupError(error)),
       });
-      client.requestAccessToken({ prompt: 'select_account', ...(account ? { login_hint: account } : {}) });
+      client.requestAccessToken({ prompt: accountHint ? '' : 'select_account', ...(accountHint ? { login_hint: accountHint } : {}) });
     } catch (error) { finish(error); }
     return attempt.promise;
   }

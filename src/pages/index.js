@@ -5,6 +5,10 @@ import { Capacitor } from '@capacitor/core';
 import { NativeAudio } from '../lib/native-audio';
 import { App } from '@capacitor/app';
 import OnlinePlaylists from '../components/OnlinePlaylists';
+import AppSettings from '../components/AppSettings';
+import MobileNavigation from '../components/MobileNavigation';
+import { useAppUpdates } from '../components/AppUpdates';
+import SongArtwork from '../components/SongArtwork';
 import { createGoogleDriveApi, isMusicFile, MUSIC_ACCEPT, ROOT_FOLDER, normalizeState } from '../lib/google-drive';
 import { locationKey, normalizeFolderPath, openVerifiedGoogleLibrary } from '../lib/google-library';
 import { prepareGoogleSignIn, connectGoogle, getGoogleAccessToken, selectGoogleAccount, disconnectGoogle, importGoogleConfig, configureGoogle, openGoogleSetup } from '../lib/google-auth';
@@ -28,6 +32,7 @@ const icons = {
   logout: 'M10 4H4v16h6v-2H6V6h4V4Zm4.6 3.6L13.2 9l2 2H9v2h6.2l-2 2 1.4 1.4L19 12l-4.4-4.4Z',
   repeat: 'M7 7h10l-2-2 1.4-1.4L20.8 8l-4.4 4.4L15 11l2-2H7a3 3 0 0 0-3 3H2a5 5 0 0 1 5-5Zm10 10H7l2 2-1.4 1.4L3.2 16l4.4-4.4L9 13l-2 2h10a3 3 0 0 0 3-3h2a5 5 0 0 1-5 5Z',
   close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z',
+  settings: 'M12 2l2.2 3.2 3.8-.3.3 3.8L22 11v2l-3.7 2.3-.3 3.8-3.8-.3L12 22l-2.2-3.2-3.8.3-.3-3.8L2 13v-2l3.7-2.3.3-3.8 3.8.3L12 2Zm0 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
 };
 
 function Icon({ name, size = 20 }) {
@@ -56,7 +61,7 @@ function GoogleLogo() {
   return <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.8 3-4.3 3-7.4Z" /><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.7-5.6-4H3.1v2.6A10 10 0 0 0 12 22Z" /><path fill="#FBBC05" d="M6.4 14.1a6 6 0 0 1 0-4.2V7.3H3.1a10 10 0 0 0 0 9.4l3.3-2.6Z" /><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.9 5.3l3.3 2.6A6 6 0 0 1 12 5.9Z" /></svg>;
 }
 
-function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, busy, error }) {
+function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, loginEmail, onLoginEmail, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, busy, error }) {
   const [configText, setConfigText] = useState('');
   const submitConfig = async (event) => {
     event.preventDefault();
@@ -71,6 +76,7 @@ function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, 
         <p className="login-hint">验证你的 Google 账号后，进入 Drive 文件夹，选择自己的音乐播放。</p>
         <ol className="login-steps"><li><span>1</span>Google 登录验证</li><li><span>2</span>打开音乐目录</li><li><span>3</span>选歌播放</li></ol>
         <div className="google-login">
+          {googleReady && !isDesktop && !isNative && <label>Google 账号邮箱（可选）<input type="email" value={loginEmail} onChange={(event) => onLoginEmail(event.target.value)} placeholder="填写要连接的 Google 账号，留空可选择账号" disabled={busy} autoComplete="email" /></label>}
           <button className="google-button" onClick={onGoogleLogin} disabled={busy || !googleReady}><GoogleLogo />{busy ? '正在连接 Google…' : !googleReady ? '正在准备 Google 登录…' : '使用 Google 账号登录'}</button>
           {googleReady && !googleConfigured && <p className="setup-hint">首次连接需要一次 Google 应用配置。点击登录会打开 Google 官方设置页面，完成后就能进入音乐目录。</p>}
           <div className="config-actions">
@@ -98,13 +104,17 @@ function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, 
         {setupMessage && <p className="setup-message" role="status">{setupMessage}</p>}
         {error && <p className="login-error" role="alert">{error}</p>}
         <p className="login-safe">授权读取 Drive 目录和音乐；上传与播放记录保存在应用曲库中。Google 密码由 Google 管理。</p>
-        <div className="online-login-entry"><button className="outline-button" onClick={onOnlinePlaylists} disabled={busy}>Spotify / YouTube Music 歌单</button><p>粘贴歌单链接即可打开，无需 Google Drive 登录或 JSON 配置。</p></div>
+        <div className="online-login-entry"><button className="outline-button" onClick={onOnlinePlaylists} disabled={busy}>歌单下载 · Spotify / YouTube Music</button><p>粘贴歌单链接即可打开，无需 Google Drive 登录或 JSON 配置。</p></div>
       </section>
     </main>
   );
 }
 
 export default function Home() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const { hasUpdate } = useAppUpdates();
   const [showOnlinePlaylists, setShowOnlinePlaylists] = useState(false);
   const [savingSong, setSavingSong] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState('');
@@ -132,6 +142,7 @@ export default function Home() {
   const [driveApi, setDriveApi] = useState(null);
   const [googleReady, setGoogleReady] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
   const [isDesktop, setIsDesktop] = useState(false);
   const [showGoogleSetup, setShowGoogleSetup] = useState(false);
   const [setupMessage, setSetupMessage] = useState('');
@@ -146,6 +157,7 @@ export default function Home() {
   const nativeQueueRef = useRef([]);
   const uploadInputRef = useRef(null);
   const uploadControllerRef = useRef(null);
+  const repairSongsRef = useRef(null);
   const playbackControllerRef = useRef(null);
   const playbackRequestRef = useRef(0);
   const blobUrlRef = useRef('');
@@ -177,7 +189,7 @@ export default function Home() {
     title: song.title || '未知歌曲',
     artist: song.artist || '未知歌手',
     album: song.album || '',
-    cover: '',
+    cover: song.coverUrl || '',
     url: api.mediaUrl(song.id),
   }));
 
@@ -223,7 +235,9 @@ export default function Home() {
     setFolders(directory.folders);
     setSongs(directory.songs);
     localStorage.setItem(locationKey(session.accountId), JSON.stringify(path));
-    setCurrentSong((song) => song || directory.songs[0] || null);
+    setCurrentSong((song) => song ? directory.songs.find((item) => item.id === song.id) || song : directory.songs[0] || null);
+    setPlaybackQueue((queue) => queue.map((song) => directory.songs.find((item) => item.id === song.id) || song));
+    nativeQueueRef.current = nativeQueueRef.current.map((song) => directory.songs.find((item) => item.id === song.id) || song);
   }, []);
 
   const openDirectory = useCallback(async (path, nextApi = api) => {
@@ -328,6 +342,7 @@ export default function Home() {
         return token;
       });
       const { session, storageQuota: quota, path, directory, remoteState, notice, stateError } = await openVerifiedGoogleLibrary(nextApi, {
+        expectedEmail: account,
         readLocation: (accountId) => {
           try { return JSON.parse(localStorage.getItem(locationKey(accountId)) || 'null'); } catch { return null; }
         },
@@ -336,6 +351,7 @@ export default function Home() {
       email = session.email;
       await selectGoogleAccount(email);
       if (generation !== sessionGenerationRef.current) return;
+      setLoginEmail(email);
       const cached = readCachedState(session);
       const state = normalizeState(cached?.dirty || !remoteState ? cached : remoteState);
       localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: Boolean(cached?.dirty) }));
@@ -356,6 +372,7 @@ export default function Home() {
         }
       }
     } catch (requestError) {
+      if (generation === sessionGenerationRef.current && requestError.code === 'GOOGLE_ACCOUNT_MISMATCH') await disconnectGoogle().catch(() => {});
       if (requestError.code === 'GOOGLE_CONFIG_REQUIRED') setShowGoogleSetup(true);
       if (generation === sessionGenerationRef.current) setError(requestError.message);
     } finally {
@@ -399,7 +416,7 @@ export default function Home() {
   };
 
   const beginGoogleLogin = () => {
-    if (googleConfigured) return googleLogin();
+    if (googleConfigured) return googleLogin({ account: !isDesktop && !isNative ? loginEmail.trim() || undefined : undefined });
     setShowGoogleSetup(true);
     return openSetup();
   };
@@ -415,6 +432,7 @@ export default function Home() {
       setIsDesktop(Boolean(window.electronAPI?.google));
       setGoogleReady(true);
       setGoogleConfigured(status.configured);
+      if (typeof status.account === 'string') setLoginEmail(status.account);
       if (status.connected && !startupLoginRef.current) {
         startupLoginRef.current = true;
         googleLoginRef.current({ interactive: false, account: status.account });
@@ -437,8 +455,13 @@ export default function Home() {
   useEffect(() => {
     if (!isNative) return undefined;
     let listener;
+    let active = true;
     App.addListener('backButton', () => {
-      if (showOnlinePlaylists) {
+      if (menuOpen) {
+        setMenuOpen(false);
+      } else if (showSettings) {
+        setShowSettings(false);
+      } else if (showOnlinePlaylists) {
         setShowOnlinePlaylists(false);
       } else if (showQueue) {
         setShowQueue(false);
@@ -449,9 +472,9 @@ export default function Home() {
       } else {
         App.minimizeApp();
       }
-    }).then((handle) => { listener = handle; });
-    return () => { listener?.remove(); };
-  }, [isNative, showOnlinePlaylists, showPlayer, showQueue, credentials, folderPath, busy, upload, openDirectory]);
+    }).then((handle) => { if (active) listener = handle; else handle.remove(); });
+    return () => { active = false; listener?.remove(); };
+  }, [isNative, menuOpen, showSettings, showOnlinePlaylists, showPlayer, showQueue, credentials, folderPath, busy, upload, openDirectory]);
 
   useEffect(() => {
     if (!isNative || !credentials || showOnlinePlaylists) return undefined;
@@ -580,6 +603,7 @@ export default function Home() {
   };
 
   const logout = async () => {
+    setLoginEmail('');
     const previousApi = api;
     const previousGoogle = isGoogle;
     ++sessionGenerationRef.current;
@@ -688,6 +712,7 @@ export default function Home() {
   };
 
   const openOnlinePlaylists = async () => {
+    setMenuOpen(false);
     ++playbackRequestRef.current;
     playbackControllerRef.current?.abort();
     audioRef.current?.pause();
@@ -699,25 +724,48 @@ export default function Home() {
     setLoadingTrack(false);
     setShowPlayer(false);
     setShowQueue(false);
+    setShowSettings(false);
     setShowOnlinePlaylists(true);
   };
 
-  const uploadDownloadedMp3 = api && credentials ? async (file) => {
+  const uploadDownloadedMp3 = api && credentials ? async (file, metadata) => {
     const generation = sessionGenerationRef.current;
     const folder = await api.ensureFolder();
-    const song = await api.uploadMusic(file);
+    const song = await api.uploadMusic(file, { metadata });
     if (generation === sessionGenerationRef.current && folderPathRef.current.at(-1).id === folder.id) setSongs((items) => [...items.filter((item) => item.id !== song.id), song]);
     return song;
   } : null;
-  if (showOnlinePlaylists) return <OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={uploadDownloadedMp3} uploadAccount={credentials?.accountId || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} />;
-  if (!credentials) return <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />;
+  const repairDownloadedMp3 = api && credentials ? async (file, metadata, fileRecord) => {
+    const generation = sessionGenerationRef.current;
+    if (repairSongsRef.current?.api !== api) repairSongsRef.current = { api, songs: api.listSongs().catch((failure) => { if (repairSongsRef.current?.api === api) repairSongsRef.current = null; throw failure; }) };
+    const library = await repairSongsRef.current.songs;
+    if (generation !== sessionGenerationRef.current) throw new Error('Google 账号已变更，请重新补全歌曲信息。');
+    const originalName = fileRecord?.originalName || file.name;
+    const sourceMatches = metadata?.sourceUrl ? library.filter((song) => song.sourceUrl === metadata.sourceUrl) : [];
+    const original = sourceMatches.length === 1 ? sourceMatches[0] : library.find((song) => song.fileName === originalName || song.fileName === file.name);
+    if (!original) throw new Error(`云端未找到原歌曲：${originalName}，已跳过，避免重复上传。`);
+    const song = await api.updateMusic(original.id, file, { metadata });
+    Object.assign(original, song);
+    if (generation === sessionGenerationRef.current) {
+      setSongs((items) => items.map((item) => item.id === song.id ? song : item));
+      setCurrentSong((item) => item?.id === song.id ? song : item);
+      setPlaybackQueue((items) => items.map((item) => item.id === song.id ? song : item));
+      nativeQueueRef.current = nativeQueueRef.current.map((item) => item.id === song.id ? song : item);
+    }
+    return song;
+  } : null;
+  const openSettings = () => { setMenuOpen(false); setShowPlayer(false); setShowQueue(false); setShowSettings(true); };
+  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
+  const settingsPage = <AppSettings user={credentials} onLogin={() => { setShowSettings(false); setShowOnlinePlaylists(false); beginGoogleLogin(); }} onBack={() => setShowSettings(false)} onOpenPlaylists={openOnlinePlaylists} busy={busy} />;
+  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
+  if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />}</>;
 
   const navItems = [
     ['云端曲库', 'folder'], ['我的收藏', 'heart'], ['最近播放', 'history'],
   ];
 
   return (
-    <div className="music-app">
+    <>{navigation}{showSettings && settingsPage}<div className="music-app" style={showSettings ? { display: 'none' } : undefined}>
       <aside className="sidebar">
         <div className="brand"><span><Icon name="logo" size={25} /></span><strong>云感音乐</strong></div>
         <nav>
@@ -735,9 +783,11 @@ export default function Home() {
             </button>
           ))}
           <p>Google Drive</p>
-          <button onClick={openOnlinePlaylists}><Icon name="radio" size={19} /><span>Spotify / YouTube</span></button>
+          <button onClick={openOnlinePlaylists}><Icon name="radio" size={19} /><span>歌单下载</span></button>
           <button disabled={busy || Boolean(upload)} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={19} /><span>我的云盘</span></button>
           <button disabled={busy || Boolean(upload)} onClick={openUploads}><Icon name="upload" size={19} /><span>上传目录</span></button>
+          <p>应用</p>
+          <button onClick={openSettings}><Icon name="settings" size={19} /><span>设置</span>{hasUpdate && <small className="sidebar-update-dot">有更新</small>}</button>
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
@@ -803,7 +853,7 @@ export default function Home() {
                 <button key={song.id} disabled={busy} className={`track-row ${currentSong?.id === song.id ? 'playing' : ''}`} onClick={() => playSong(song)}>
                   <span className="track-index">{currentSong?.id === song.id && isPlaying ? <i className="equalizer"><b /><b /><b /></i> : String(index + 1).padStart(2, '0')}</span>
                   <span className="track-title">
-                    <span className="art"><Icon name="logo" size={20} /></span>
+                    <span className="art"><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></span>
                     <span><b>{song.title || '未知歌曲'}</b><small>{song.artist || '未知歌手'}</small></span>
                   </span>
                   <span className="album">{song.album || '未知专辑'}</span>
@@ -818,7 +868,7 @@ export default function Home() {
 
       <footer className="player">
         <button className="player-song" onClick={() => setShowPlayer(true)}>
-          <span className="player-art"><Icon name="logo" /></span>
+          <span className="player-art"><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" />} /></span>
           <span><b>{currentSong?.title || '未播放'}</b><small>{currentSong?.artist || '从曲库选择歌曲'}</small></span>
           <span onClick={(event) => { event.stopPropagation(); toggleFavorite(); }} className={favorites.includes(currentSong?.id) ? 'is-favorite' : ''}><Icon name="heart" size={19} /></span>
         </button>
@@ -846,7 +896,7 @@ export default function Home() {
         <section className="full-player">
           <button className="full-close" onClick={() => setShowPlayer(false)} aria-label="关闭"><Icon name="close" size={25} /></button>
           <div className={`vinyl ${isPlaying ? 'spinning' : ''}`}>
-            <div><Icon name="logo" size={52} /></div>
+            <div><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" size={52} />} /></div>
           </div>
           <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p></div>
           <button className={`full-heart ${favorites.includes(currentSong?.id) ? 'is-favorite' : ''}`} onClick={toggleFavorite}><Icon name="heart" size={25} /></button>
@@ -870,6 +920,6 @@ export default function Home() {
         </div>
       )}
       {isGoogle && <input ref={uploadInputRef} className="hidden-file-input" type="file" multiple accept={MUSIC_ACCEPT} aria-label="选择要上传的音乐文件" onChange={(event) => { uploadMusic(event.target.files); event.target.value = ''; }} />}
-    </div>
+    </div></>
   );
 }

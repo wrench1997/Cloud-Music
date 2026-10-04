@@ -1,0 +1,89 @@
+.modeTabs {
+  display: flex;
+  gap: 6px;
+  width: fit-content;
+  padding: 5px;
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f1f2f4;
+}
+
+.modeTabs button {
+  min-height: 42px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  color: #666;
+  font-weight: 600;
+}
+
+.modeTabs button[aria-pressed='true'] {
+  background: white;
+  color: var(--red);
+  box-shadow: 0 1px 5px #0000000d;
+}
+
+.workspace {
+  align-items: start;
+}
+
+.content {
+  min-width: 0;
+}
+
+.downloadArea[hidden],
+.content > section[hidden] {
+  display: none;
+}
+
+.downloadArea > :global(.download-panel) {
+  margin-top: 0;
+}
+
+.selectedPlaylist {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 14px;
+  overflow-wrap: anywhere;
+}
+
+.selectedPlaylist b,
+.selectedPlaylist small {
+  display: block;
+}
+
+.selectedPlaylist small {
+  margin-top: 3px;
+  color: #888;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .content {
+    order: -1;
+  }
+
+  .modeTabs {
+    width: 100%;
+  }
+
+  .modeTabs button {
+    flex: 1;
+    padding: 10px 8px;
+  }
+
+  .downloadArea > :global(.download-panel) {
+    padding: 18px 16px;
+  }
+
+  .saved {
+    max-height: 340px;
+    overflow-y: auto;
+  }
+}

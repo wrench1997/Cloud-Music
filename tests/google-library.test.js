@@ -38,6 +38,22 @@ test('verified accounts restore only their own directory, and refresh its name f
   assert.deepEqual(normalizeFolderPath([root, { id: "injected' query", name: 'Music' }]), [root]);
 });
 
+test('a requested account must match Google before reading directories or touching library state', async () => {
+  let reads = 0;
+  const instance = api({
+    listDirectory: async () => { reads += 1; return directory; },
+    loadState: async () => { reads += 1; return {}; },
+  });
+  await assert.rejects(openVerifiedGoogleLibrary(instance, {
+    expectedEmail: 'another@example.com',
+    readLocation: () => { reads += 1; return null; },
+  }), { code: 'GOOGLE_ACCOUNT_MISMATCH' });
+  assert.equal(reads, 0);
+  const result = await openVerifiedGoogleLibrary(instance, { expectedEmail: ' Verified@Example.com ' });
+  assert.equal(result.session.email, 'verified@example.com');
+  assert.equal(reads, 2);
+});
+
 test('a deleted or inaccessible saved folder returns to the root, while expired authorization cannot enter', async () => {
   for (const status of [403, 404, 401]) {
     const calls = [];

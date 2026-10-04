@@ -1,0 +1,21 @@
+.trigger{position:fixed;z-index:60;top:max(9px,calc(env(safe-area-inset-top) + 9px));left:max(12px,env(safe-area-inset-left));display:none;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid #e8e8e8;border-radius:12px;color:#333;background:#fff;box-shadow:0 2px 9px #00000006}
+.standalone{display:flex}
+.dot{position:absolute;right:7px;top:6px;width:7px;height:7px;border-radius:50%;background:#ec4141}
+.backdrop{position:fixed;z-index:110;inset:0;background:#0006;animation:fade .15s ease-out}
+.drawer{display:flex;flex-direction:column;width:min(320px,86vw);height:100dvh;padding:calc(env(safe-area-inset-top) + 22px) 18px calc(env(safe-area-inset-bottom) + 20px);background:#fff;box-shadow:8px 0 40px #0002;overflow:auto;animation:slide .18s ease-out}
+.drawer header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.drawer header>button{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;color:#777}
+.brand{display:flex;align-items:center;gap:10px;font-size:20px}
+.brand>span,.avatar{display:grid;place-items:center;flex-shrink:0;background:#ec4141;color:white;border-radius:50%}
+.brand>span{width:34px;height:34px;font-size:25px}
+.account{display:flex;align-items:center;gap:12px;margin:28px 0 25px;padding:18px 12px;border-radius:14px;background:#faf5f5}
+.avatar{width:38px;height:38px;font-size:18px;background:#f1d7d7;color:#a73838}
+.account>div{min-width:0}.account b,.account small{display:block;overflow-wrap:anywhere}.account b{font-size:13px}.account small{font-size:11px;color:#888;margin-top:6px}
+.drawer nav{display:grid;gap:8px}.drawer nav>button{display:flex;align-items:center;gap:14px;width:100%;min-height:72px;padding:14px;border-radius:12px;text-align:left;color:#555}
+.drawer nav>button:hover{background:#f7f7f7}.drawer nav>button[aria-current]{background:#fcecec;color:#cf3030}
+.drawer nav>button>span{flex:1}.drawer nav b,.drawer nav small{display:block}.drawer nav b{font-size:16px;font-weight:600}.drawer nav small{margin-top:5px;color:#999;font-size:11px}.drawer nav em{font-size:10px;font-style:normal;color:#c53030;background:#fbe2e2;border-radius:6px;padding:3px 6px}
+.footer{margin:auto 0 0;padding-top:30px;color:#aaa;font-size:12px;text-align:center}
+.trigger:focus-visible,.drawer button:focus-visible{outline:2px solid #ec4141;outline-offset:3px}
+@keyframes fade{from{opacity:0}to{opacity:1}}@keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(0)}}
+@media(max-width:760px){.trigger{display:flex}}
+@media(prefers-reduced-motion:reduce){.backdrop,.drawer{animation:none}}

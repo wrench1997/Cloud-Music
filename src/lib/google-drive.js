@@ -1,3 +1,4 @@
+const { readAudioMetadata, id3TagLength, parseId3, metadataProperties, thumbnailFromMetadata, mergeAudioMetadata, httpsUrl, musicFileName } = require('./audio-metadata');
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file'];
@@ -6,7 +7,7 @@ const ROOT_FOLDER = { id: 'root', name: '我的云盘' };
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const MUSIC_EXTENSIONS = /\.(mp3|wav|flac|ogg|m4a|aac|wma|ape|dsf|dff|aiff|aif|alac|opus|amr|ac3|dts|tta|webm)$/i;
 const MUSIC_ACCEPT = 'audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.wma,.ape,.dsf,.dff,.aiff,.aif,.alac,.opus,.amr,.ac3,.dts,.tta,.webm';
-const FILE_FIELDS = 'id,name,mimeType,size,modifiedTime,properties,appProperties';
+const FILE_FIELDS = 'id,name,mimeType,size,modifiedTime,properties,appProperties,thumbnailLink';
 const CHUNK_SIZE = 8 * 1024 * 1024;
 
 function isMusicFile(file) {
@@ -14,18 +15,28 @@ function isMusicFile(file) {
 }
 
 function songFromFile(file) {
-  const name = (file.name || '').replace(MUSIC_EXTENSIONS, '');
-  const separator = name.indexOf(' - ');
+  let name = (file.name || '').replace(MUSIC_EXTENSIONS, '');
+  const suffix = /-([A-Za-z0-9_-]{11})$/.exec(name);
+  const legacy = suffix && (name.slice(0, suffix.index).includes('_') || /[0-9_-]/.test(suffix[1])) && !name.slice(0, suffix.index).endsWith(' ');
+  if (legacy) name = name.slice(0, suffix.index).replace(/_/g, ' ');
+  name = name.trim();
+  const parts = /^(.+?) - (.+)$/.exec(name);
+  const variant = /^(?:(?:super|ultra)\s+)?(?:slowed|sped\s+up|reverb|original\s+(?:mix|version)|remix)(?:\s*(?:[+&-]\s*)?(?:reverb|version|edit|down))*$/i;
+  const artistTitle = parts && parts[1].trim() && parts[2].trim() && !variant.test(parts[2].trim());
   const metadata = file.appProperties || {};
   return {
     id: file.id,
-    title: metadata.title || (separator >= 0 ? name.slice(separator + 3) : name),
-    artist: metadata.artist || (separator >= 0 ? name.slice(0, separator) : '未知歌手'),
+    title: metadata.title || (artistTitle ? parts[2].trim() : name),
+    artist: metadata.artist || (artistTitle ? parts[1].trim() : '未知歌手'),
     album: metadata.album || 'Google Drive',
     duration: Number(metadata.duration) || 0,
     mimeType: file.mimeType,
     size: Number(file.size) || 0,
     fileName: file.name,
+    coverUrl: httpsUrl(metadata.coverUrl),
+    sourceUrl: httpsUrl(metadata.sourceUrl),
+    thumbnailLink: file.thumbnailLink || '',
+    hasArtwork: metadata.hasArtwork === '1',
   };
 }
 
@@ -66,6 +77,13 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
   let folderPromise;
   let stateFileId;
   let saveChain = Promise.resolve();
+  const artworkCache = new Map();
+  const artworkPending = new Map();
+
+  function invalidateArtwork(id) {
+    for (const key of artworkCache.keys()) if (key.startsWith(`${id}|`)) artworkCache.delete(key);
+    for (const key of artworkPending.keys()) if (key.startsWith(`${id}|`)) artworkPending.delete(key);
+  }
 
   async function authorizedFetch(url, options = {}) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -191,15 +209,27 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
     return saveChain;
   }
 
-  async function uploadMusic(file, { signal, onProgress = () => {} } = {}) {
+  async function writeMusic(file, { id, metadata, signal, onProgress = () => {} } = {}) {
     if (!isMusicFile(file)) throw new Error(`不支持的音频文件：${file.name}`);
     if (!file.size) throw new Error(`文件为空：${file.name}`);
-    const folder = await ensureFolder();
+    signal?.throwIfAborted();
+    const existing = id ? await json(`${DRIVE_API}/files/${validFileId(id)}?fields=${FILE_FIELDS}&supportsAllDrives=true`, { signal }) : null;
+    const embedded = await readAudioMetadata(file, { signal });
+    const details = mergeAudioMetadata(embedded, metadata);
+    const appProperties = { ...existing?.appProperties, ...metadataProperties(details) };
+    const thumbnail = thumbnailFromMetadata(details);
+    if (thumbnail) appProperties.hasArtwork = '1';
+    const folder = id ? null : await ensureFolder();
     const contentType = file.type || 'application/octet-stream';
-    const response = await check(await authorizedFetch(`${DRIVE_UPLOAD}/files?uploadType=resumable&fields=${FILE_FIELDS}`, {
-      method: 'POST', signal,
+    const body = { name: file.name, mimeType: contentType, properties: { ...existing?.properties, yunganMusic: 'track-v1' },
+      ...(folder ? { parents: [folder.id] } : {}),
+      ...(Object.keys(appProperties).length ? { appProperties } : {}),
+      ...(thumbnail ? { contentHints: { thumbnail } } : {}),
+    };
+    const response = await check(await authorizedFetch(`${DRIVE_UPLOAD}/files${id ? `/${id}` : ''}?uploadType=resumable&fields=${FILE_FIELDS}&supportsAllDrives=true`, {
+      method: id ? 'PATCH' : 'POST', signal,
       headers: { 'Content-Type': 'application/json', 'X-Upload-Content-Type': contentType, 'X-Upload-Content-Length': String(file.size) },
-      body: JSON.stringify({ name: file.name, mimeType: contentType, parents: [folder.id], properties: { yunganMusic: 'track-v1' } }),
+      body: JSON.stringify(body),
     }));
     const sessionUrl = response.headers.get('Location');
     if (!sessionUrl || new URL(sessionUrl).origin !== 'https://www.googleapis.com') throw new Error('Google Drive 未返回有效的上传地址。');
@@ -224,8 +254,11 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
         continue;
       }
       if (uploaded.ok) {
+        const result = await uploaded.json();
+        if (id && result.id && result.id !== id) throw new Error('更新返回了不同的文件 ID，请刷新曲库检查。');
+        if (id) invalidateArtwork(id);
         onProgress(file.size, file.size);
-        return songFromFile(await uploaded.json());
+        return songFromFile({ ...existing, ...body, ...result, ...(id ? { id } : {}), appProperties: { ...appProperties, ...result.appProperties } });
       }
       if (uploaded.status !== 308) await check(uploaded);
       const range = uploaded.headers.get('Range');
@@ -239,8 +272,116 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
     throw new Error('上传未完成，请重试。');
   }
 
+  function uploadMusic(file, options) { return writeMusic(file, options); }
+
+  function updateMusic(id, file, options) { return writeMusic(file, { ...options, id: validFileId(id) }); }
+
+  async function updateSongMetadata(id, metadata, { rename = false, signal } = {}) {
+    validFileId(id);
+    const existing = await json(`${DRIVE_API}/files/${id}?fields=${FILE_FIELDS}&supportsAllDrives=true`, { signal });
+    const appProperties = { ...existing.appProperties, ...metadataProperties(metadata) };
+    const body = { appProperties };
+    const thumbnail = thumbnailFromMetadata(metadata);
+    if (thumbnail) { body.contentHints = { thumbnail }; appProperties.hasArtwork = '1'; }
+    if (rename) {
+      const name = typeof rename === 'string' ? rename : musicFileName(appProperties, existing.name?.match(/\.[^.]+$/)?.[0] || '.mp3');
+      if (name) body.name = name;
+    }
+    const result = await json(`${DRIVE_API}/files/${id}?fields=${FILE_FIELDS}&supportsAllDrives=true`, {
+      method: 'PATCH', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    invalidateArtwork(id);
+    return songFromFile({ ...existing, ...body, ...result, id, appProperties: { ...appProperties, ...result.appProperties } });
+  }
+
+  async function embeddedArtwork(id, signal) {
+    const url = `${DRIVE_API}/files/${id}?alt=media&supportsAllDrives=true`;
+    const readRange = async (end) => {
+      const response = await check(await authorizedFetch(url, { signal, headers: { Range: `bytes=0-${end}` } }));
+      // Stop if a server ignores Range instead of fetching a whole music file for its cover.
+      if (response.status !== 206) { await response.body?.cancel(); return null; }
+      const length = Number(response.headers.get('Content-Length'));
+      if (length > end + 1) { await response.body?.cancel(); return null; }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return bytes.length === end + 1 ? bytes : null;
+    };
+    const header = await readRange(9);
+    if (!header) return null;
+    const length = id3TagLength(header);
+    if (!length) return null;
+    const bytes = await readRange(length - 1);
+    const picture = bytes && parseId3(bytes).picture;
+    return picture ? new Blob([picture.data], { type: picture.mimeType }) : null;
+  }
+
+  async function artworkUncached(song, { signal } = {}) {
+    const id = validFileId(typeof song === 'string' ? song : song?.id);
+    let link = typeof song === 'object' ? song.thumbnailLink : '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!link) link = (await json(`${DRIVE_API}/files/${id}?fields=thumbnailLink&supportsAllDrives=true`, { signal })).thumbnailLink;
+      if (!link) return embeddedArtwork(id, signal);
+      let url;
+      try { url = new URL(link); } catch { throw new Error('无效的 Google Drive 封面地址。'); }
+      const host = url.hostname.toLowerCase();
+      if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')
+        || !(host === 'drive.google.com' || host === 'www.googleapis.com' || /^lh\d+\.googleusercontent\.com$/.test(host))) throw new Error('封面地址不属于 Google Drive。');
+      // Never forward a Google bearer token through a thumbnail redirect to another host.
+      try {
+        const response = await authorizedFetch(url.href, { signal, redirect: 'error' });
+        if ([403, 404].includes(response.status) && attempt === 0) { link = ''; continue; }
+        await check(response);
+        const blob = await response.blob();
+        if (!/^image\/(?:jpeg|png|webp|gif)$/.test(blob.type) || blob.size > 5 * 1024 * 1024) throw new Error('Google Drive 没有返回有效的封面图片。');
+        return blob;
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (error.code === 'GOOGLE_AUTH_REQUIRED') throw error;
+        // Google thumbnail hosts may block web CORS; ID3 ranges use the Drive API instead.
+        return embeddedArtwork(id, signal);
+      }
+    }
+    return null;
+  }
+
+  function artwork(song, { signal } = {}) {
+    signal?.throwIfAborted();
+    const id = validFileId(typeof song === 'string' ? song : song?.id);
+    const key = `${id}|${typeof song === 'object' ? song.thumbnailLink || '' : ''}`;
+    const cached = artworkCache.get(key);
+    let pending;
+    if (cached && cached.expires > Date.now()) {
+      artworkCache.delete(key); artworkCache.set(key, cached);
+      pending = Promise.resolve(cached.blob);
+    } else {
+      artworkCache.delete(key);
+      pending = artworkPending.get(key);
+      if (!pending) {
+        // Shared work does not borrow one component's abort signal.
+        pending = artworkUncached(song).then((blob) => {
+          if (artworkPending.get(key) !== pending) return blob;
+          artworkCache.set(key, { blob, expires: Date.now() + (blob ? 300000 : 30000) });
+          let bytes = [...artworkCache.values()].reduce((sum, entry) => sum + (entry.blob?.size || 0), 0);
+          while (artworkCache.size > 24 || bytes > 20 * 1024 * 1024) {
+            const first = artworkCache.keys().next().value;
+            bytes -= artworkCache.get(first).blob?.size || 0;
+            artworkCache.delete(first);
+          }
+          return blob;
+        }).finally(() => { if (artworkPending.get(key) === pending) artworkPending.delete(key); });
+        artworkPending.set(key, pending);
+      }
+    }
+    if (!signal) return pending;
+    return new Promise((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) aborted();
+      pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted));
+    });
+  }
+
   return {
-    provider: 'google', base: 'Google Drive', ensureFolder, listSongs, getFolder, listDirectory, loadState, saveState, uploadMusic,
+    provider: 'google', base: 'Google Drive', ensureFolder, listSongs, getFolder, listDirectory, loadState, saveState, uploadMusic, updateMusic, updateSongMetadata, artwork,
     flush: () => saveChain,
     getAccount: () => json(`${DRIVE_API}/about?fields=user(displayName,emailAddress,photoLink,permissionId),storageQuota(limit,usage)`),
     mediaUrl: (id) => `${DRIVE_API}/files/${validFileId(id)}?alt=media&supportsAllDrives=true`,

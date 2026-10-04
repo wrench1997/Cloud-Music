@@ -3,16 +3,18 @@ const inFlightUploads = new Map();
 
 async function transferDownloadedFiles(task, {
   getAccount, getUpload, shouldUpload, isActive, fetchFile, saveLocal,
-  handled, storage, onStatus = () => {},
+  handled, storage, onStatus = () => {}, metadataOnly = false,
 }) {
   const account = getAccount();
-  const result = { total: task.files.length, uploaded: 0, savedLocal: 0, interrupted: false, cloudRequested: false, account };
+  const result = { total: task.files.length, uploaded: 0, savedLocal: 0, skipped: 0, interrupted: false, cloudRequested: false, account };
   const isCurrent = () => isActive() && getAccount() === account;
   for (const file of task.files) {
     if (!isCurrent()) { result.interrupted = true; break; }
+    if (metadataOnly && (!file.metadata || file.metadataRepairSkipped === true)) { result.skipped += 1; continue; }
     const key = `${task.id}:${file.name}`;
-    const cloudKey = `yungan-downloaded-upload:${account}:${key}`;
-    const handledCloudKey = `cloud:${account}:${key}`;
+    const metadataRevision = task.metadataRepair?.revision ?? file.metadataRevision ?? 'v1';
+    const cloudKey = metadataOnly ? `yungan-downloaded-metadata:${account}:${key}:${metadataRevision}` : `yungan-downloaded-upload:${account}:${key}`;
+    const handledCloudKey = metadataOnly ? `metadata:${account}:${key}:${metadataRevision}` : `cloud:${account}:${key}`;
     const readCompleted = () => {
       try { if (account && storage?.getItem(cloudKey) === 'complete') handled.add(handledCloudKey); } catch {}
       return handled.has(handledCloudKey);
@@ -41,7 +43,7 @@ async function transferDownloadedFiles(task, {
         upload = inFlightUploads.get(handledCloudKey);
         if (!upload && !readCompleted()) {
           upload = Promise.resolve().then(async () => {
-            await uploadFile(audio);
+            await uploadFile(audio, file.metadata, file);
             handled.add(handledCloudKey);
             try { storage?.setItem(cloudKey, 'complete'); } catch {}
           });
