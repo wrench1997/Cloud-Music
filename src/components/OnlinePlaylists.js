@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { STORAGE_KEY, MAX_PLAYLISTS, parsePlaylistLink, normalizePlaylists } from '../lib/online-playlists';
 import PlaylistDownloads from './PlaylistDownloads';
 
-export default function OnlinePlaylists({ onClose, onUpload, onGoogleLogin }) {
+export default function OnlinePlaylists({ onClose, onUpload, onGoogleLogin, uploadAccount }) {
   const [playlists, setPlaylists] = useState([]);
   const [selected, setSelected] = useState(null);
   const [link, setLink] = useState('');
@@ -61,12 +61,12 @@ export default function OnlinePlaylists({ onClose, onUpload, onGoogleLogin }) {
         </div>)}<p className="online-local">链接保存在这台设备，不会上传到 Google Drive。</p>
       </section>
       <section className="online-player" aria-label="平台歌单播放器">{selected ? <>
-        <header><div><h2>{selected.name}</h2><small>{selected.provider === 'spotify' ? 'Spotify' : 'YouTube Music · YouTube 播放器'}</small></div><button onClick={() => choose(selected)}>重新加载</button></header>
+        <header><div><h2>{selected.name}</h2><small>{selected.provider === 'spotify' ? '播放来源：Spotify 原平台' : 'YouTube Music · YouTube 播放器'}</small></div><button onClick={() => choose(selected)}>重新加载</button></header>
         <iframe key={`${selected.key}:${retry}`} src={selected.embedUrl} title={`${selected.name} 播放器`} className={`online-frame ${selected.provider}`} allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setLoaded(true); setNotice(''); }} onError={() => setNotice('播放器无法载入，请重试或打开原平台。')} />
         <p className="online-player-hint">在上方播放器中点击播放。{selected.provider === 'spotify' ? '完整播放或试听由 Spotify 根据账号、地区和设备决定。' : '支持公开或不公开且允许嵌入的内容。私密歌单、部分音乐或自动生成歌单可能无法播放；锁屏和后台播放不保证可用。'}</p>
         <a className="outline-button" href={selected.url} target="_blank" rel="noopener noreferrer">在 {selected.provider === 'spotify' ? 'Spotify' : 'YouTube Music'} 打开 ↗</a>
       </> : <div className="online-empty online-placeholder"><span>♫</span><h2>选择一个歌单开始</h2><p>Spotify 和 YouTube Music，放在同一个入口。</p></div>}</section>
     </div>
-    <PlaylistDownloads playlist={selected} onUpload={onUpload} onGoogleLogin={onGoogleLogin} />
+    <PlaylistDownloads playlist={selected} onUpload={onUpload} onGoogleLogin={onGoogleLogin} uploadAccount={uploadAccount} />
   </main>;
 }

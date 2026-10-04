@@ -51,6 +51,8 @@ async function desktop() {
     if (name === 'better-sqlite3') return Database;
     if (name === './tray') return { createMusicTray };
     if (name === './google-auth') return { createGoogleAuth: () => ({ initialize() {}, dispose() { disposed = true; } }) };
+    if (name === './app-updater') return { createAppUpdater: () => ({ start() {}, dispose() {} }) };
+    if (name === 'electron-updater') return { autoUpdater: {} };
     return require(name);
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8'), {

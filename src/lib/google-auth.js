@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { DRIVE_SCOPE, DRIVE_SCOPES } from './google-drive';
 import { GOOGLE_SETUP_URLS, validateWebClientId } from './google-config';
+import { readWebSession, writeWebSession, clearWebSession } from './google-web-session';
 
 const GoogleDriveAuth = registerPlugin('GoogleDriveAuth');
 const WEB_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
@@ -12,6 +13,10 @@ let webToken;
 let webExpiresAt = 0;
 
 const needsLogin = () => Object.assign(new Error('Google 登录已过期，请点击“重新连接”继续。'), { code: 'GOOGLE_AUTH_REQUIRED' });
+
+function browserSessionStorage() {
+  try { return window.sessionStorage; } catch { return undefined; }
+}
 
 function loadGoogleIdentity() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
@@ -31,21 +36,24 @@ function loadGoogleIdentity() {
 
 export async function prepareGoogleSignIn() {
   if (window.electronAPI?.google) return window.electronAPI.google.status();
-  if (Capacitor.isNativePlatform()) return { configured: true };
+  if (Capacitor.isNativePlatform()) return GoogleDriveAuth.status();
   try { webClientId = localStorage.getItem(WEB_CONFIG_KEY) || WEB_CLIENT_ID; } catch {}
   if (!webClientId) return { configured: false };
   webClientId = validateWebClientId(webClientId);
+  const saved = readWebSession(browserSessionStorage(), webClientId);
+  webToken = saved?.accessToken;
+  webExpiresAt = saved?.expiresAt || 0;
   await loadGoogleIdentity();
   if (!tokenClient) {
     tokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: webClientId, scope: DRIVE_SCOPE, callback: () => {} });
   }
-  return { configured: true };
+  return { configured: true, connected: Boolean(webToken), remembersLogin: true };
 }
 
 export function connectGoogle({ interactive = true, account } = {}) {
   if (window.electronAPI?.google) return window.electronAPI.google.signIn({ interactive });
   if (Capacitor.isNativePlatform()) return GoogleDriveAuth.signIn({ interactive, account }).then((result) => result.accessToken);
-  if (!interactive) return Promise.reject(needsLogin());
+  if (!interactive) return webToken && webExpiresAt > Date.now() + 60000 ? Promise.resolve(webToken) : Promise.reject(needsLogin());
   if (!tokenClient) return Promise.reject(Object.assign(new Error(webClientId ? 'Google 登录组件尚未就绪，请稍后重试。' : '首次连接需要 Google 应用配置，请在登录页完成设置后继续。'), { code: webClientId ? 'GOOGLE_NOT_READY' : 'GOOGLE_CONFIG_REQUIRED' }));
   return new Promise((resolve, reject) => {
     tokenClient.callback = (result) => {
@@ -53,8 +61,9 @@ export function connectGoogle({ interactive = true, account } = {}) {
         reject(new Error('请允许读取 Google Drive 目录和音乐，以及保存应用曲库。'));
         return;
       }
-      webToken = result.access_token;
-      webExpiresAt = Date.now() + Number(result.expires_in || 3600) * 1000;
+      const session = writeWebSession(browserSessionStorage(), webClientId, result);
+      webToken = session.accessToken;
+      webExpiresAt = session.expiresAt;
       resolve(webToken);
     };
     tokenClient.error_callback = (result) => reject(new Error(result.type === 'popup_closed' ? 'Google 登录已取消。' : '无法打开 Google 登录窗口，请允许此页面弹出窗口。'));
@@ -80,6 +89,7 @@ export async function selectGoogleAccount(email) {
 export async function disconnectGoogle() {
   webToken = undefined;
   webExpiresAt = 0;
+  clearWebSession(browserSessionStorage());
   if (window.electronAPI?.google) await window.electronAPI.google.signOut();
   else if (Capacitor.isNativePlatform()) await GoogleDriveAuth.signOut();
 }
@@ -99,6 +109,7 @@ export async function configureGoogle(text) {
   tokenClient = nextClient;
   webToken = undefined;
   webExpiresAt = 0;
+  clearWebSession(browserSessionStorage());
   return { configured: true };
 }
 

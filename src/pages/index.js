@@ -155,6 +155,8 @@ export default function Home() {
   const playerActionsRef = useRef({});
   const directoryRequestRef = useRef(0);
   const folderPathRef = useRef([ROOT_FOLDER]);
+  const startupLoginRef = useRef(false);
+  const googleLoginRef = useRef(null);
 
   const api = credentials ? driveApi : null;
   const isGoogle = credentials?.provider === 'google';
@@ -401,16 +403,24 @@ export default function Home() {
     setShowGoogleSetup(true);
     return openSetup();
   };
+  useEffect(() => { googleLoginRef.current = googleLogin; });
 
   useEffect(() => {
-    // Every fresh launch starts at the Google gate; a cached NAS session or directory is never a login.
+    let active = true;
+    // Legacy directory caches are not credentials; restore only a platform-held Google authorization.
     localStorage.removeItem('yungan-session');
     prepareGoogleSignIn().then((status) => {
+      if (!active) return;
       setIsNative(Capacitor.isNativePlatform());
       setIsDesktop(Boolean(window.electronAPI?.google));
       setGoogleReady(true);
       setGoogleConfigured(status.configured);
-    }).catch((requestError) => { setGoogleReady(true); setError(requestError.message); });
+      if (status.connected && !startupLoginRef.current) {
+        startupLoginRef.current = true;
+        googleLoginRef.current({ interactive: false, account: status.account });
+      }
+    }).catch((requestError) => { if (active) { setGoogleReady(true); setError(requestError.message); } });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => () => {
@@ -698,7 +708,7 @@ export default function Home() {
     if (folderPathRef.current.at(-1).id === folder.id) setSongs((items) => [...items.filter((item) => item.id !== song.id), song]);
     return song;
   } : null;
-  if (showOnlinePlaylists) return <OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={uploadDownloadedMp3} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} />;
+  if (showOnlinePlaylists) return <OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={uploadDownloadedMp3} uploadAccount={credentials?.accountId || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} />;
   if (!credentials) return <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />;
 
   const navItems = [

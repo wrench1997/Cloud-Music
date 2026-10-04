@@ -73,7 +73,7 @@ function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImp
   }
 
   function status() {
-    return { configured: Boolean(config?.clientId), connected: Boolean(tokens?.refreshToken || tokens?.accessToken), remembersLogin: safeStorage.isEncryptionAvailable() };
+    return { configured: Boolean(config?.clientId), connected: Boolean(tokens?.refreshToken || (tokens?.accessToken && tokens.expiresAt > Date.now() + 60000)), remembersLogin: safeStorage.isEncryptionAvailable() };
   }
 
   async function exchange(params) {
@@ -83,7 +83,11 @@ function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImp
       signal: AbortSignal.timeout(30000),
     });
     const data = await response.json();
-    if (!response.ok || !data.access_token) throw authRequired(data.error === 'invalid_grant' ? 'Google 授权已失效，请重新连接账号。' : '无法完成 Google 授权，请检查 OAuth 配置和网络。');
+    if (!response.ok || !data.access_token) {
+      if (data.error === 'invalid_grant') throw authRequired('Google 授权已失效，请重新连接账号。');
+      // Network and Google service failures must not discard a securely saved refresh token.
+      throw Object.assign(new Error('暂时无法完成 Google 授权，请检查网络后重试。'), { code: 'GOOGLE_TOKEN_EXCHANGE_FAILED' });
+    }
     const granted = data.scope ? data.scope.split(/\s+/) : params.grant_type === 'refresh_token' ? tokens?.scopes || [] : [];
     if (!DRIVE_SCOPES.every((scope) => granted.includes(scope))) throw authRequired('请重新登录并允许读取 Google Drive 目录和音乐，以及保存应用曲库。');
     return data;

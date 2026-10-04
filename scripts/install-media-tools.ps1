@@ -12,8 +12,8 @@ Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.
 Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256' -OutFile (Join-Path $toolsDir 'ffmpeg.sha256')
 $expectedFfmpeg = ((Get-Content (Join-Path $toolsDir 'ffmpeg.sha256') -Raw).Trim() -split '\s+')[0]
 if ((Get-FileHash $ffmpegZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedFfmpeg.ToLowerInvariant()) { throw 'FFmpeg checksum verification failed' }
-Expand-Archive -LiteralPath $ffmpegZip -DestinationPath (Join-Path $toolsDir 'ffmpeg') -Force
-$ffmpegBin = Get-ChildItem (Join-Path $toolsDir 'ffmpeg') -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+Expand-Archive -LiteralPath $ffmpegZip -DestinationPath (Join-Path $toolsDir 'ffmpeg-extracted') -Force
+$ffmpegBin = Get-ChildItem (Join-Path $toolsDir 'ffmpeg-extracted') -Recurse -Filter ffmpeg.exe | Select-Object -First 1
 if (!$ffmpegBin) { throw 'FFmpeg executable missing' }
 Copy-Item -LiteralPath $ffmpegBin.FullName -Destination (Join-Path $toolsDir 'ffmpeg.exe') -Force
 Copy-Item -LiteralPath (Join-Path $ffmpegBin.DirectoryName 'ffprobe.exe') -Destination (Join-Path $toolsDir 'ffprobe.exe') -Force

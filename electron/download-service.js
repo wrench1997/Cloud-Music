@@ -36,6 +36,8 @@ function parseSpotifyMetadata(html) {
 }
 
 function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
+  toolsDir = path.resolve(toolsDir);
+  outputDir = path.resolve(outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
   const token = crypto.randomBytes(24).toString('hex');
   const executable = path.join(toolsDir, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
@@ -49,6 +51,40 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
   let baseUrl;
   let starting;
   let disposed = false;
+
+  function readFiles(directory) {
+    return fs.readdirSync(directory).filter((name) => name.endsWith('.mp3') && fs.lstatSync(path.join(directory, name)).isFile() && fs.statSync(path.join(directory, name)).size > 0).map((name) => ({ name, size: fs.statSync(path.join(directory, name)).size }));
+  }
+  function persistJob(job) {
+    const directory = path.join(outputDir, job.id);
+    const temporary = path.join(directory, '.job.json.tmp');
+    fs.writeFileSync(temporary, JSON.stringify(job));
+    fs.renameSync(temporary, path.join(directory, '.job.json'));
+  }
+  // Recover finished MP3s and interrupted conversions when the app restarts.
+  for (const id of fs.readdirSync(outputDir).filter((name) => /^[a-f0-9-]{36}$/.test(name)).sort((left, right) => fs.statSync(path.join(outputDir, left)).mtimeMs - fs.statSync(path.join(outputDir, right)).mtimeMs).slice(-100)) {
+    const directory = path.join(outputDir, id);
+    if (!fs.lstatSync(directory).isDirectory()) continue;
+    try {
+      let files = readFiles(directory);
+      const manifest = path.join(directory, '.job.json');
+      const saved = fs.existsSync(manifest) && fs.statSync(manifest).size < 200000 ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : null;
+      if (saved && Array.isArray(saved.files)) files = files.filter((file) => saved.files.some((known) => known.name === file.name));
+      const pending = fs.readdirSync(directory).flatMap((name) => {
+        const match = name.match(/-([\w-]{11})\.(?:webm|m4a|opus|ogg)$/);
+        return match && fs.lstatSync(path.join(directory, name)).isFile() ? [{ url: `https://www.youtube.com/watch?v=${match[1]}`, title: name.slice(0, -match[0].length).replace(/_/g, ' '), error: '音源已下载，MP3 转换未完成。' }] : [];
+      });
+      const unfinished = saved?.state === 'running' && Array.isArray(saved.sources) ? saved.sources.filter((source) => !files.some((file) => file.name.endsWith(`-${new URL(source.url).searchParams.get('v')}.mp3`))).map((source) => ({ ...source, error: '上次下载被中断，请重试。' })) : (saved?.failures || pending);
+      const failures = unfinished.filter((item) => {
+        try { return parseSource(item.url).provider === 'youtube' && typeof item.title === 'string'; } catch { return false; }
+      }).slice(0, 100);
+      files = files.filter((file) => !failures.some((failure) => file.name.endsWith(`-${new URL(failure.url).searchParams.get('v')}.mp3`)));
+      if (!files.length && !failures.length) continue;
+      const total = Math.max(Number(saved?.total) || 0, files.length + failures.length);
+      const job = { id, createdAt: Number(saved?.createdAt) || fs.statSync(directory).birthtimeMs, state: failures.length ? (files.length ? 'partial' : 'failed') : 'complete', phase: 'finished', title: String(saved?.title || failures[0]?.title || files[0]?.name || '已保存的下载'), completed: files.length, total, progress: Math.floor(files.length / total * 100), cancelled: false, files, failures, sources: failures.map(({ url, title }) => ({ url, title })), error: failures.map((item) => `${item.title}: ${item.error || '下载未完成。'}`).join('\n').slice(0, 3000) };
+      jobs.set(id, job);
+    } catch { /* An incomplete manifest must not prevent startup. */ }
+  }
 
   function toolArgs() {
     if (!fs.existsSync(executable) || !fs.existsSync(ffmpeg)) throw new Error('下载工具未安装，请先运行 npm run media:install。');
@@ -97,7 +133,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
     const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--', `ytsearch3:${entry.search}`]));
     return (data.entries || []).filter((item) => /^[\w-]{11}$/.test(item.id)).map((item) => ({ title: item.title, artist: item.uploader || item.channel || '', duration: Number(item.duration || 0), url: `https://www.youtube.com/watch?v=${item.id}` }));
   }
-  function publicJob(job) { return { id: job.id, state: job.state, title: job.title, progress: job.progress, error: job.error, files: job.files }; }
+  function publicJob(job) { return { id: job.id, createdAt: job.createdAt, state: job.state, title: job.title, progress: job.progress, phase: job.phase, completed: job.completed, total: job.total, failures: job.failures, error: job.error, files: job.files }; }
   function startJob(entries) {
     if (!Array.isArray(entries) || !entries.length || entries.length > 100) throw new Error('请选择 1 至 100 首音乐。');
     if ([...jobs.values()].some((job) => job.state === 'running')) throw new Error('已有下载任务正在运行，请等待完成。');
@@ -111,24 +147,54 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
     const id = crypto.randomUUID();
     const directory = path.join(outputDir, id);
     fs.mkdirSync(directory);
-    const job = { id, state: 'running', title: sources[0].title, progress: 0, files: [], error: '', cancelled: false, failures: [] };
+    const job = { id, createdAt: Date.now(), state: 'running', title: sources[0].title, progress: 0, phase: 'download', completed: 0, total: sources.length, sources, files: [], error: '', cancelled: false, failures: [] };
     jobs.set(id, job);
+    persistJob(job);
+    executeJob(job, sources, directory);
+    return publicJob(job);
+  }
+  function executeJob(job, sources, directory) {
+    const alreadyCompleted = job.completed;
     (async () => {
       for (let index = 0; index < sources.length; index++) {
         if (job.cancelled) break;
         job.title = sources[index].title;
+        job.phase = 'download';
         try {
-          await run(['--no-playlist', '--newline', '--progress', '--progress-template', 'download:PROGRESS:%(progress._percent_str)s', '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0', '--ffmpeg-location', toolsDir, '--restrict-filenames', '-o', path.join(directory, '%(title).100s-%(id)s.%(ext)s'), '--', sources[index].url], (line) => {
+          await run(['--no-playlist', '--newline', '--progress', '--progress-template', 'download:PROGRESS:%(progress._percent_str)s', '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0', '--ffmpeg-location', ffmpeg, '--restrict-filenames', '-o', path.join(directory, '%(title).100s-%(id)s.%(ext)s'), '--', sources[index].url], (line) => {
             const percentage = line.match(/^PROGRESS:\s*([\d.]+)%/);
-            if (percentage) job.progress = Math.floor((index + Number(percentage[1]) / 100) / sources.length * 100);
+            if (percentage) job.progress = Math.min(99, Math.floor((alreadyCompleted + index + Number(percentage[1]) / 100 * 0.9) / job.total * 100));
+            if (line.startsWith('[ExtractAudio]')) job.phase = 'convert';
           }, 20 * 60 * 1000);
-          job.files = fs.readdirSync(directory).filter((name) => name.endsWith('.mp3')).map((name) => ({ name, size: fs.statSync(path.join(directory, name)).size }));
-        } catch (error) { if (!job.cancelled) job.failures.push(`${sources[index].title}: ${error.message}`); }
-        job.progress = Math.floor((index + 1) / sources.length * 100);
+          const files = readFiles(directory);
+          const sourceId = new URL(sources[index].url).searchParams.get('v');
+          if (!files.some((file) => file.name.endsWith(`-${sourceId}.mp3`) && file.size > 0)) throw new Error('音源没有生成有效 MP3，请重试或更换音源。');
+          job.files = files;
+          job.completed++;
+        } catch (error) {
+          const sourceId = new URL(sources[index].url).searchParams.get('v');
+          for (const name of fs.readdirSync(directory)) if (name.endsWith(`-${sourceId}.mp3`) && fs.lstatSync(path.join(directory, name)).isFile() && !job.files.some((completed) => completed.name === name)) fs.unlinkSync(path.join(directory, name));
+          if (!job.cancelled) job.failures.push({ ...sources[index], error: error.message.slice(0, 1500) });
+        }
+        job.progress = Math.min(99, Math.floor((alreadyCompleted + index + 1) / job.total * 100));
+        persistJob(job);
       }
-      job.state = job.cancelled ? 'cancelled' : job.failures.length ? 'partial' : 'complete';
-      job.error = job.failures.join('\n').slice(0, 3000);
+      job.state = job.cancelled ? 'cancelled' : job.failures.length ? (job.completed ? 'partial' : 'failed') : 'complete';
+      job.phase = 'finished';
+      job.progress = job.state === 'complete' ? 100 : Math.floor(job.completed / job.total * 100);
+      job.error = job.failures.map((failure) => `${failure.title}: ${failure.error}`).join('\n').slice(0, 3000);
+      persistJob(job);
     })().catch((error) => { job.state = 'failed'; job.error = error.message; });
+  }
+  function retryJob(job) {
+    if (job.state === 'running' || [...jobs.values()].some((item) => item.state === 'running')) throw new Error('请等待当前下载任务完成。');
+    if (!job.failures.length) throw new Error('没有需要重试的曲目。');
+    toolArgs();
+    const sources = job.failures.map(({ url, title }) => ({ url, title }));
+    job.sources = sources;
+    job.failures = []; job.error = ''; job.cancelled = false; job.state = 'running';
+    persistJob(job);
+    executeJob(job, sources, path.join(outputDir, job.id));
     return publicJob(job);
   }
   async function readJson(request) {
@@ -147,11 +213,17 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
     if (request.headers.authorization !== `Bearer ${token}`) { reply(response, 401, { error: '配对码不正确。' }); return; }
     const url = new URL(request.url, 'http://localhost');
     try {
-      if (request.method === 'GET' && url.pathname === '/status') { reply(response, 200, { ready: fs.existsSync(executable) && fs.existsSync(ffmpeg), jobs: [...jobs.values()].map(publicJob) }); return; }
+      if (request.method === 'GET' && url.pathname === '/status') { reply(response, 200, { ready: fs.existsSync(executable) && fs.existsSync(ffmpeg), jobs: [...jobs.values()].sort((left, right) => left.createdAt - right.createdAt).map(publicJob) }); return; }
       if (request.method === 'POST' && url.pathname === '/inspect') { reply(response, 200, await inspect((await readJson(request)).url)); return; }
       if (request.method === 'POST' && url.pathname === '/match') { reply(response, 200, await match(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/jobs') { reply(response, 200, startJob((await readJson(request)).entries)); return; }
       const jobRoute = url.pathname.match(/^\/jobs\/([\w-]+)$/);
+      const retryRoute = url.pathname.match(/^\/jobs\/([\w-]+)\/retry$/);
+      if (request.method === 'POST' && retryRoute) {
+        const job = jobs.get(retryRoute[1]);
+        if (!job) { reply(response, 404, { error: '任务不存在。' }); return; }
+        reply(response, 200, retryJob(job)); return;
+      }
       if (jobRoute) {
         const job = jobs.get(jobRoute[1]);
         if (!job) { reply(response, 404, { error: '任务不存在。' }); return; }

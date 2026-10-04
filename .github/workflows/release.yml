@@ -1,0 +1,119 @@
+name: Windows and Android release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag matching package.json, e.g. v1.2.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Check release version and restore the existing Android signing key
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          ANDROID_SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Release tag must match package.json version.' }
+          if (!$env:NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID) { throw 'Set the GOOGLE_WEB_CLIENT_ID repository variable before building.' }
+          if (!$env:ANDROID_SIGNING_KEYSTORE_BASE64 -or !$env:ANDROID_KEYSTORE_PASSWORD -or !$env:ANDROID_KEY_ALIAS -or !$env:ANDROID_KEY_PASSWORD) {
+            throw 'Configure the existing Android signing-key secrets. A new debug key would break installed app upgrades and Google sign-in.'
+          }
+          $keyPath = Join-Path $env:RUNNER_TEMP 'music-release.keystore'
+          [IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:ANDROID_SIGNING_KEYSTORE_BASE64))
+          "ANDROID_KEYSTORE_PATH=$keyPath" | Out-File -LiteralPath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install dependencies and verify code
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          npx eslint src electron tests scripts
+          if ($LASTEXITCODE -ne 0) { throw 'Lint failed' }
+      - name: Install bundled media tools and build Windows
+        shell: pwsh
+        run: |
+          npm run media:install
+          if ($LASTEXITCODE -ne 0) { throw 'Media tools failed' }
+          npm run icons
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Web build failed' }
+          npx electron-builder --win nsis --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+      - name: Build Android with the existing signer
+        shell: pwsh
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK install failed' }
+          npx cap sync android
+          if ($LASTEXITCODE -ne 0) { throw 'Android sync failed' }
+          Push-Location android
+          try {
+            .\gradlew.bat assembleRelease testDebugUnitTest
+            if ($LASTEXITCODE -ne 0) { throw 'Android build/tests failed' }
+          } finally { Pop-Location }
+          $signature = & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk
+          if ($LASTEXITCODE -ne 0) { throw 'Android signature verification failed' }
+          if (($signature -join "`n") -notmatch 'SHA-256 digest: 84fa131593a6b4d062c7eb672c9595c68dd6fd54571a6932d22f6b85e9804e50') { throw 'Signing certificate differs from the existing installed Android app.' }
+      - name: Prepare update metadata
+        shell: pwsh
+        run: node scripts/release-manifest.cjs .local/release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: music-release-assets
+          path: .local/release-assets/*
+          if-no-files-found: error
+      - name: Publish complete GitHub release
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release view $env:RELEASE_TAG --json isDraft > $null 2>&1
+          if ($LASTEXITCODE -eq 0) { throw 'This release already exists. Use a new version instead of replacing installed update files.' }
+          $releaseFiles = @(Get-ChildItem -LiteralPath .local/release-assets -File | ForEach-Object { $_.FullName })
+          gh release create $env:RELEASE_TAG @releaseFiles --draft --verify-tag --title "云感音乐 $env:RELEASE_TAG" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publishing failed' }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release activation failed' }
+      - name: Remove signing key
+        if: always()
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'music-release.keystore'
+          if (Test-Path -LiteralPath $keyPath) { Remove-Item -LiteralPath $keyPath -Force }

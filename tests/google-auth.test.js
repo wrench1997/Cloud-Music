@@ -141,6 +141,61 @@ test('concurrent access-token refresh makes one exchange and restores securely s
   assert.equal(await restored.signIn({ interactive: false }), 'refreshed-access');
 });
 
+test('desktop relaunch refreshes an expired encrypted session without opening login and logout persists across restarts', async (t) => {
+  let refreshes = 0;
+  const { auth, begin, deps, directory } = await fixture(t, async (url, options) => {
+    const params = new URLSearchParams(options.body);
+    if (params.get('grant_type') === 'refresh_token') {
+      refreshes += 1;
+      return Response.json(tokenResponse('restored-access'));
+    }
+    return Response.json(tokenResponse('initial-access', 'persistent-refresh'));
+  });
+  const login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  const credentialsPath = path.join(directory, 'google-account.bin');
+  const saved = JSON.parse(deps.safeStorage.decryptString(fs.readFileSync(credentialsPath)));
+  saved.tokens.expiresAt = Date.now() - 1000;
+  fs.writeFileSync(credentialsPath, deps.safeStorage.encryptString(JSON.stringify(saved)));
+  deps.shell.openExternal = () => { throw new Error('Restoring login must not open a browser'); };
+  const restored = createGoogleAuth(deps);
+  restored.initialize();
+  t.after(() => restored.dispose());
+  assert.equal(restored.status().connected, true);
+  assert.equal(await restored.signIn({ interactive: false }), 'restored-access');
+  assert.equal(refreshes, 1);
+  await restored.signOut();
+  const loggedOut = createGoogleAuth(deps);
+  loggedOut.initialize();
+  t.after(() => loggedOut.dispose());
+  assert.equal(loggedOut.status().connected, false);
+  await assert.rejects(loggedOut.signIn({ interactive: false }), { code: 'GOOGLE_AUTH_REQUIRED' });
+});
+
+test('temporary refresh-service errors preserve a saved desktop account while revoked grants clear it', async (t) => {
+  let failure = 'temporary';
+  const { auth, begin, deps } = await fixture(t, async (url, options) => {
+    if (new URLSearchParams(options.body).get('grant_type') !== 'refresh_token') return Response.json(tokenResponse('initial', 'saved-refresh'));
+    return Response.json({ error: failure === 'temporary' ? 'temporarily_unavailable' : 'invalid_grant' }, { status: failure === 'temporary' ? 503 : 400 });
+  });
+  const login = await begin();
+  await fetch(login.callback());
+  await login.pending;
+  await assert.rejects(auth.getAccessToken({ force: true }), { code: 'GOOGLE_TOKEN_EXCHANGE_FAILED' });
+  assert.equal(auth.status().connected, true);
+  const afterNetworkFailure = createGoogleAuth(deps);
+  afterNetworkFailure.initialize();
+  t.after(() => afterNetworkFailure.dispose());
+  assert.equal(afterNetworkFailure.status().connected, true);
+  failure = 'revoked';
+  await assert.rejects(auth.getAccessToken({ force: true }), { code: 'GOOGLE_AUTH_REQUIRED' });
+  const afterRevocation = createGoogleAuth(deps);
+  afterRevocation.initialize();
+  t.after(() => afterRevocation.dispose());
+  assert.equal(afterRevocation.status().connected, false);
+});
+
 test('switching accounts never reuses another account refresh token and logout invalidates stream links', async (t) => {
   let grants = 0;
   const { auth, begin } = await fixture(t, async (url, options) => {

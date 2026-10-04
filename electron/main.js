@@ -11,6 +11,7 @@ let pendingOpenFile = null;
 let musicTray;
 let isQuitting = false;
 let downloadService;
+let appUpdater;
 const googleAuth = createGoogleAuth({ app, shell, safeStorage, dialog, getWindow: () => mainWindow });
 // 支持的音频格式：MP3, WAV, FLAC, OGG, M4A, AAC, WMA, APE, DSD, AIFF, ALAC, OPUS, AMR
 const supportedAudioExtensions = new Set([
@@ -143,6 +144,12 @@ if (!gotSingleInstanceLock) {
     initDatabase();
     createWindow();
     if (process.platform === 'win32') {
+      const { createAppUpdater } = require('./app-updater');
+      const { autoUpdater } = require('electron-updater');
+      appUpdater = createAppUpdater({ app, autoUpdater, getWindow: () => mainWindow, prepareQuit: () => { isQuitting = true; } });
+      appUpdater.start();
+    }
+    if (process.platform === 'win32') {
       musicTray = createMusicTray({ app, Tray, Menu, getWindow: () => mainWindow, iconPath: path.join(__dirname, '../public/icon.ico') });
     }
 
@@ -170,7 +177,16 @@ app.on('before-quit', () => {
   musicTray?.destroy();
   googleAuth.dispose();
   downloadService?.dispose();
+  appUpdater?.dispose();
 });
+
+for (const method of ['status', 'check', 'install']) {
+  ipcMain.handle(`app-update-${method}`, async (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('无效的应用窗口。');
+    if (!appUpdater) return { state: 'unsupported' };
+    return appUpdater[method]();
+  });
+}
 
 ipcMain.on('player-state', (event, state) => {
   if (event.sender === mainWindow?.webContents && state && typeof state === 'object') musicTray?.update(state);

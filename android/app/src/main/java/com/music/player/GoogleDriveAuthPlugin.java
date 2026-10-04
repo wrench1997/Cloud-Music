@@ -33,8 +33,22 @@ public class GoogleDriveAuthPlugin extends Plugin {
     private static volatile long expiresAt;
     private static volatile String accountEmail;
     private static volatile int accountGeneration;
+    private GoogleAccountStore accountStore;
     private PluginCall pendingCall;
     private int pendingGeneration;
+
+    @Override
+    public void load() {
+        // The no-backup directory avoids carrying an account selection to another device via cloud backup.
+        accountStore = new GoogleAccountStore(getContext().getNoBackupFilesDir());
+        if (accountEmail == null) accountEmail = accountStore.read();
+    }
+
+    @PluginMethod
+    public void status(PluginCall call) {
+        call.resolve(new JSObject().put("configured", true).put("connected", accountEmail != null)
+            .put("remembersLogin", true).put("account", accountEmail));
+    }
 
     private static AuthorizationRequest request(String email) {
         AuthorizationRequest.Builder builder = AuthorizationRequest.builder()
@@ -60,6 +74,8 @@ public class GoogleDriveAuthPlugin extends Plugin {
         String email = call.getString("account");
         if (pendingCall != null) { call.reject("Google 登录正在进行，请稍候。"); return; }
         if (interactive) {
+            try { accountStore.clear(); }
+            catch (IOException error) { call.reject("无法清除上一个 Google 账号。", error); return; }
             accountGeneration++;
             accessToken = null;
             expiresAt = 0;
@@ -75,6 +91,14 @@ public class GoogleDriveAuthPlugin extends Plugin {
                 } catch (Exception error) { pendingCall = null; call.reject("无法选择 Google 账号，请检查 Google Play 服务。", error); }
                 return;
             }
+        }
+        if (!interactive) {
+            if (email == null || email.isEmpty()) email = accountEmail;
+            if (email == null || !email.equals(accountEmail)) {
+                call.reject("请重新连接 Google 账号。", "GOOGLE_AUTH_REQUIRED");
+                return;
+            }
+            call.getData().put("account", email);
         }
         if (!interactive && (email == null || email.equals(accountEmail)) && !Boolean.TRUE.equals(call.getBoolean("force", false))
                 && accessToken != null && expiresAt > System.currentTimeMillis()) {
@@ -144,8 +168,12 @@ public class GoogleDriveAuthPlugin extends Plugin {
 
     @PluginMethod
     public void setAccount(PluginCall call) {
-        accountEmail = call.getString("email");
-        call.resolve();
+        String email = call.getString("email");
+        try {
+            accountStore.write(email);
+            accountEmail = email;
+            call.resolve();
+        } catch (IOException error) { call.reject(error.getMessage(), error); }
     }
 
     @PluginMethod
@@ -155,7 +183,8 @@ public class GoogleDriveAuthPlugin extends Plugin {
         expiresAt = 0;
         accountEmail = null;
         if (pendingCall != null) { pendingCall.reject("Google 登录已取消。"); pendingCall = null; }
-        call.resolve();
+        try { accountStore.clear(); call.resolve(); }
+        catch (IOException error) { call.reject("无法清除已保存的 Google 账号。", error); }
     }
 
     // ExoPlayer calls this on its loading thread; Google Play services renews the in-memory token.
