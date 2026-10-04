@@ -11,6 +11,7 @@ import { useAppUpdates } from '../components/AppUpdates';
 import SongArtwork from '../components/SongArtwork';
 import { createGoogleDriveApi, isMusicFile, MUSIC_ACCEPT, ROOT_FOLDER, normalizeState } from '../lib/google-drive';
 import { locationKey, normalizeFolderPath, openVerifiedGoogleLibrary } from '../lib/google-library';
+import { createGoogleLoginRecovery, isTransientError } from '../lib/google-login-recovery';
 import { prepareGoogleSignIn, connectGoogle, getGoogleAccessToken, selectGoogleAccount, disconnectGoogle, importGoogleConfig, configureGoogle, openGoogleSetup } from '../lib/google-auth';
 
 const icons = {
@@ -61,7 +62,7 @@ function GoogleLogo() {
   return <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.8 3-4.3 3-7.4Z" /><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.7-5.6-4H3.1v2.6A10 10 0 0 0 12 22Z" /><path fill="#FBBC05" d="M6.4 14.1a6 6 0 0 1 0-4.2V7.3H3.1a10 10 0 0 0 0 9.4l3.3-2.6Z" /><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.9 5.3l3.3 2.6A6 6 0 0 1 12 5.9Z" /></svg>;
 }
 
-function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, loginEmail, onLoginEmail, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, busy, error }) {
+function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, onOpenSetup, onToggleSetup, loginEmail, onLoginEmail, showSetup, setupMessage, googleReady, googleConfigured, isDesktop, isNative, rememberedLogin, restoringLogin, busy, error }) {
   const [configText, setConfigText] = useState('');
   const submitConfig = async (event) => {
     event.preventDefault();
@@ -73,11 +74,11 @@ function Login({ onOnlinePlaylists, onGoogleLogin, onImportConfig, onConfigure, 
         <div className="login-logo"><Icon name="logo" size={34} /></div>
         <p className="eyebrow">YUNGAN MUSIC</p>
         <h1>登录 Google，打开目录</h1>
-        <p className="login-hint">验证你的 Google 账号后，进入 Drive 文件夹，选择自己的音乐播放。</p>
+        <p className="login-hint">{rememberedLogin ? '已记住 Google 账号，恢复连接后即可打开音乐目录。' : '验证你的 Google 账号后，进入 Drive 文件夹，选择自己的音乐播放。'}</p>
         <ol className="login-steps"><li><span>1</span>Google 登录验证</li><li><span>2</span>打开音乐目录</li><li><span>3</span>选歌播放</li></ol>
         <div className="google-login">
           {googleReady && !isDesktop && !isNative && <label>Google 账号邮箱（可选）<input type="email" value={loginEmail} onChange={(event) => onLoginEmail(event.target.value)} placeholder="填写要连接的 Google 账号，留空可选择账号" disabled={busy} autoComplete="email" /></label>}
-          <button className="google-button" onClick={onGoogleLogin} disabled={busy || !googleReady}><GoogleLogo />{busy ? '正在连接 Google…' : !googleReady ? '正在准备 Google 登录…' : '使用 Google 账号登录'}</button>
+          <button className="google-button" onClick={onGoogleLogin} disabled={busy || !googleReady || restoringLogin}><GoogleLogo />{restoringLogin ? '正在恢复登录…' : busy ? '正在连接 Google…' : !googleReady ? '正在准备 Google 登录…' : rememberedLogin ? '恢复已登录账号' : '使用 Google 账号登录'}</button>
           {googleReady && !googleConfigured && <p className="setup-hint">首次连接需要一次 Google 应用配置。点击登录会打开 Google 官方设置页面，完成后就能进入音乐目录。</p>}
           <div className="config-actions">
             {isDesktop && <button className="config-button" onClick={onImportConfig} disabled={busy}>{googleConfigured ? '更换配置并登录' : '已有配置？导入并登录'}</button>}
@@ -143,6 +144,8 @@ export default function Home() {
   const [googleReady, setGoogleReady] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
+  const [rememberedLogin, setRememberedLogin] = useState(false);
+  const [restoringLogin, setRestoringLogin] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [showGoogleSetup, setShowGoogleSetup] = useState(false);
   const [setupMessage, setSetupMessage] = useState('');
@@ -167,7 +170,11 @@ export default function Home() {
   const playerActionsRef = useRef({});
   const directoryRequestRef = useRef(0);
   const folderPathRef = useRef([ROOT_FOLDER]);
-  const startupLoginRef = useRef(false);
+  const loginRecoveryRef = useRef(null);
+  const startLoginRecoveryRef = useRef(null);
+  const rememberedLoginRef = useRef(false);
+  const automaticRestoreAllowedRef = useRef(true);
+  const loginRecoveryCycleRef = useRef(0);
   const googleLoginRef = useRef(null);
 
   const api = credentials ? driveApi : null;
@@ -304,6 +311,11 @@ export default function Home() {
   };
 
   const googleLogin = async ({ interactive = true, account } = {}) => {
+    if (interactive) {
+      automaticRestoreAllowedRef.current = false;
+      loginRecoveryRef.current?.stop();
+      setRestoringLogin(false);
+    }
     const generation = ++sessionGenerationRef.current;
     ++directoryRequestRef.current;
     setBusy(true);
@@ -343,15 +355,20 @@ export default function Home() {
       });
       const { session, storageQuota: quota, path, directory, remoteState, notice, stateError } = await openVerifiedGoogleLibrary(nextApi, {
         expectedEmail: account,
+        onVerifiedAccount: async (verified) => {
+          if (generation !== sessionGenerationRef.current) throw Object.assign(new Error('Google 登录已取消。'), { code: 'GOOGLE_LOGIN_CANCELLED' });
+          email = verified.email;
+          await selectGoogleAccount(email);
+          if (generation !== sessionGenerationRef.current) throw Object.assign(new Error('Google 登录已取消。'), { code: 'GOOGLE_LOGIN_CANCELLED' });
+          rememberedLoginRef.current = true;
+          setRememberedLogin(true);
+          setLoginEmail(email);
+        },
         readLocation: (accountId) => {
           try { return JSON.parse(localStorage.getItem(locationKey(accountId)) || 'null'); } catch { return null; }
         },
       });
       if (generation !== sessionGenerationRef.current) return;
-      email = session.email;
-      await selectGoogleAccount(email);
-      if (generation !== sessionGenerationRef.current) return;
-      setLoginEmail(email);
       const cached = readCachedState(session);
       const state = normalizeState(cached?.dirty || !remoteState ? cached : remoteState);
       localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: Boolean(cached?.dirty) }));
@@ -365,16 +382,38 @@ export default function Home() {
       applyMusicState(state);
       setSyncStatus(stateError ? '播放记录读取失败' : cached?.dirty ? '有记录待同步' : '收藏与播放记录已同步');
       if (cached?.dirty) {
-        await nextApi.saveState(state);
-        if (generation === sessionGenerationRef.current) {
-          localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: false }));
-          setSyncStatus('收藏与播放记录已同步');
+        try {
+          await nextApi.saveState(state);
+          if (generation === sessionGenerationRef.current) {
+            localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: false }));
+            setSyncStatus('收藏与播放记录已同步');
+          }
+        } catch (syncError) {
+          // The account and library are already connected. A failed background
+          // sync must not restart login and discard a queue the user just opened.
+          if (generation === sessionGenerationRef.current) {
+            setSyncStatus('播放记录有更新待同步');
+            setError(`播放记录暂时无法同步：${syncError.message}`);
+            if (syncError.code === 'GOOGLE_AUTH_REQUIRED') {
+              rememberedLoginRef.current = false;
+              setRememberedLogin(false);
+            }
+          }
         }
       }
+      return generation === sessionGenerationRef.current ? { connected: true } : { cancelled: true };
     } catch (requestError) {
       if (generation === sessionGenerationRef.current && requestError.code === 'GOOGLE_ACCOUNT_MISMATCH') await disconnectGoogle().catch(() => {});
       if (requestError.code === 'GOOGLE_CONFIG_REQUIRED') setShowGoogleSetup(true);
-      if (generation === sessionGenerationRef.current) setError(requestError.message);
+      if (generation === sessionGenerationRef.current) {
+        if (['GOOGLE_AUTH_REQUIRED', 'GOOGLE_AUTH_DENIED', 'GOOGLE_ACCOUNT_MISMATCH'].includes(requestError.code)) {
+          rememberedLoginRef.current = false;
+          setRememberedLogin(false);
+        }
+        setError(requestError.message);
+        if (interactive && rememberedLoginRef.current && isTransientError(requestError)) startLoginRecoveryRef.current?.();
+      }
+      return { error: requestError, cancelled: generation !== sessionGenerationRef.current };
     } finally {
       if (generation === sessionGenerationRef.current) setBusy(false);
     }
@@ -416,6 +455,9 @@ export default function Home() {
   };
 
   const beginGoogleLogin = () => {
+    if (googleConfigured && rememberedLoginRef.current) {
+      return startLoginRecoveryRef.current?.();
+    }
     if (googleConfigured) return googleLogin({ account: !isDesktop && !isNative ? loginEmail.trim() || undefined : undefined });
     setShowGoogleSetup(true);
     return openSetup();
@@ -424,21 +466,61 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
+    let nativeListener;
+    const generationCounter = sessionGenerationRef;
     // Legacy directory caches are not credentials; restore only a platform-held Google authorization.
     localStorage.removeItem('yungan-session');
-    prepareGoogleSignIn().then((status) => {
+    const makeRecovery = (cycle) => createGoogleLoginRecovery({
+      attempt: async () => {
+        const status = await prepareGoogleSignIn();
+        if (!active || !automaticRestoreAllowedRef.current || cycle !== loginRecoveryCycleRef.current) return { cancelled: true };
+        setIsNative(Capacitor.isNativePlatform());
+        setIsDesktop(Boolean(window.electronAPI?.google));
+        setGoogleReady(true);
+        setGoogleConfigured(status.configured);
+        rememberedLoginRef.current = Boolean(status.connected);
+        setRememberedLogin(Boolean(status.connected));
+        if (typeof status.account === 'string') setLoginEmail(status.account);
+        if (!status.connected) return false;
+        setRestoringLogin(true);
+        return googleLoginRef.current({ interactive: false, account: status.account });
+      },
+      onState: ({ state, error: requestError }) => {
+        if (!active) return;
+        setRestoringLogin(rememberedLoginRef.current && (state === 'connecting' || state === 'retrying'));
+        if (requestError) {
+          setGoogleReady(true);
+          setError(requestError.message);
+        }
+      },
+    });
+    const startRecovery = () => {
       if (!active) return;
-      setIsNative(Capacitor.isNativePlatform());
-      setIsDesktop(Boolean(window.electronAPI?.google));
-      setGoogleReady(true);
-      setGoogleConfigured(status.configured);
-      if (typeof status.account === 'string') setLoginEmail(status.account);
-      if (status.connected && !startupLoginRef.current) {
-        startupLoginRef.current = true;
-        googleLoginRef.current({ interactive: false, account: status.account });
-      }
-    }).catch((requestError) => { if (active) { setGoogleReady(true); setError(requestError.message); } });
-    return () => { active = false; };
+      loginRecoveryRef.current?.stop();
+      automaticRestoreAllowedRef.current = true;
+      const recovery = makeRecovery(++loginRecoveryCycleRef.current);
+      loginRecoveryRef.current = recovery;
+      return recovery.start();
+    };
+    startLoginRecoveryRef.current = startRecovery;
+    const retry = () => { if (active && rememberedLoginRef.current) loginRecoveryRef.current?.retry(); };
+    const foreground = () => { if (document.visibilityState === 'visible') retry(); };
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', foreground);
+    if (Capacitor.isNativePlatform()) {
+      App.addListener('appStateChange', ({ isActive }) => { if (isActive) retry(); })
+        .then((listener) => { if (active) nativeListener = listener; else listener.remove(); }).catch(() => {});
+    }
+    startRecovery();
+    return () => {
+      active = false;
+      ++generationCounter.current;
+      loginRecoveryRef.current?.stop();
+      if (startLoginRecoveryRef.current === startRecovery) startLoginRecoveryRef.current = null;
+      window.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', foreground);
+      nativeListener?.remove();
+    };
   }, []);
 
   useEffect(() => () => {
@@ -603,6 +685,11 @@ export default function Home() {
   };
 
   const logout = async () => {
+    automaticRestoreAllowedRef.current = false;
+    loginRecoveryRef.current?.stop();
+    rememberedLoginRef.current = false;
+    setRememberedLogin(false);
+    setRestoringLogin(false);
     setLoginEmail('');
     const previousApi = api;
     const previousGoogle = isGoogle;
@@ -758,7 +845,7 @@ export default function Home() {
   const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
   const settingsPage = <AppSettings user={credentials} onLogin={() => { setShowSettings(false); setShowOnlinePlaylists(false); beginGoogleLogin(); }} onBack={() => setShowSettings(false)} onOpenPlaylists={openOnlinePlaylists} busy={busy} />;
   if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
-  if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} busy={busy} error={error} />}</>;
+  if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} />}</>;
 
   const navItems = [
     ['云端曲库', 'folder'], ['我的收藏', 'heart'], ['最近播放', 'history'],

@@ -24,6 +24,24 @@ test('account identity must be verified before reading any cached directory or m
   assert.equal(reads, 0);
 });
 
+test('remember a verified identity even when a later directory request fails', async () => {
+  const events = [];
+  await assert.rejects(openVerifiedGoogleLibrary(api({
+    listDirectory: async () => { events.push('directory'); throw new TypeError('Failed to fetch'); },
+  }), {
+    onVerifiedAccount: async (session) => { events.push(`remember:${session.email}`); },
+  }), /Failed to fetch/);
+  assert.deepEqual(events, ['remember:verified@example.com', 'directory']);
+});
+
+test('an invalid or mismatched Google identity is never persisted', async () => {
+  let remembered = 0;
+  const onVerifiedAccount = () => { remembered += 1; };
+  await assert.rejects(openVerifiedGoogleLibrary(api({ getAccount: async () => ({ user: {} }) }), { onVerifiedAccount }), /无法验证/);
+  await assert.rejects(openVerifiedGoogleLibrary(api(), { onVerifiedAccount, expectedEmail: 'different@example.com' }), { code: 'GOOGLE_ACCOUNT_MISMATCH' });
+  assert.equal(remembered, 0);
+});
+
 test('verified accounts restore only their own directory, and refresh its name from Google', async () => {
   const calls = [];
   const result = await openVerifiedGoogleLibrary(api({
