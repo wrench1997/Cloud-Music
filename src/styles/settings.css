@@ -1,0 +1,34 @@
+.settings-page { width:100%; height:100dvh; overflow:auto; background:#fafafa; padding:32px max(22px,calc((100vw - 880px)/2)) max(32px,env(safe-area-inset-bottom)); }
+.settings-header { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:26px; }
+.settings-header h1 { margin:8px 0; font-size:30px; font-weight:700; }
+.settings-header p { margin:0; color:#777; font-size:14px; }
+.settings-back { flex-shrink:0; min-height:44px; padding:10px 20px; border:1px solid var(--line); border-radius:22px; background:white; }
+.settings-sections { display:grid; gap:18px; }
+.settings-card { min-width:0; padding:24px; border:1px solid var(--line); border-radius:18px; background:white; }
+.settings-card-heading { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+.settings-card-heading>div { min-width:0; flex:1; }
+.settings-card-heading h2 { margin:0; font-size:18px; font-weight:600; }
+.settings-card-heading p { margin:5px 0 0; color:#888; font-size:12px; overflow-wrap:anywhere; }
+.settings-symbol { flex:0 0 42px; display:grid; place-items:center; width:42px; height:42px; background:#fff0f0; border-radius:13px; color:var(--red); font-size:25px; }
+.settings-note { margin:12px 0; color:#777; font-size:13px; line-height:1.7; }
+.settings-note:last-child { margin-bottom:0; }
+.settings-primary { min-height:44px; padding:11px 20px; background:var(--red); color:white; border-radius:22px; font-size:14px; }
+.settings-primary:disabled { opacity:.55; cursor:wait; }
+.settings-primary:focus-visible,.settings-back:focus-visible,.settings-link:focus-visible { outline:2px solid var(--red); outline-offset:4px; }
+.settings-account { display:flex; align-items:center; gap:12px; }
+.settings-account-avatar { display:grid; place-items:center; flex:0 0 42px; width:42px; height:42px; border-radius:50%; background:#f4ede3; color:#916333; font-weight:700; }
+.settings-account>div { flex:1; min-width:0; }
+.settings-account strong,.settings-account>div>span { display:block; overflow-wrap:anywhere; }
+.settings-account strong { font-size:14px; }
+.settings-account>div>span { margin-top:4px; color:#777; font-size:12px; }
+.settings-connected { flex-shrink:0; padding:5px 8px; border-radius:8px; background:#edf9f0; color:#288447; font-size:11px; }
+.settings-actions { display:flex; flex-wrap:wrap; align-items:center; gap:16px; margin-top:18px; }
+.settings-link { display:inline-flex; align-items:center; min-height:44px; font-size:13px; color:#666; text-decoration:none; }
+.settings-link:hover { color:var(--red); }
+.settings-update-status { margin:0; font-size:14px; line-height:1.6; }
+.settings-update-badge { flex-shrink:0; padding:5px 8px; background:#fff0f0; color:var(--red); border-radius:8px; font-size:11px; }
+.settings-update-progress { display:flex; align-items:center; gap:12px; margin-top:12px; font-size:12px; color:#777; }
+.settings-update-progress progress { flex:1; height:8px; accent-color:var(--red); }
+.settings-error { margin:12px 0; color:#c83232; font-size:13px; line-height:1.6; }
+.settings-service-note { padding-top:12px; border-top:1px solid var(--line); }
+@media(max-width:760px) { .settings-page { padding:calc(78px + env(safe-area-inset-top)) 16px max(28px,env(safe-area-inset-bottom)); } .settings-header { margin-bottom:22px; } .settings-header h1 { font-size:27px; } .settings-card { padding:20px 18px; } .settings-card-heading { gap:12px; } }
