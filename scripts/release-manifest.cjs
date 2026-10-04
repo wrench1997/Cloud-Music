@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
 function androidManifest(apkPath, gradleText) {
   const version = gradleText.match(/versionName\s+"(\d+\.\d+\.\d+)"/)?.[1];
@@ -28,6 +29,16 @@ function prepareRelease({ directory, apkPath, gradlePath, windowsDirectory, wind
 if (require.main === module) {
   const root = path.resolve(__dirname, '..');
   const manifest = prepareRelease({ directory: path.resolve(process.argv[2] || path.join(root, '.local/release-assets')), apkPath: path.resolve(process.argv[3] || path.join(root, 'android/app/build/outputs/apk/release/app-release.apk')), gradlePath: path.join(root, 'android/app/build.gradle'), windowsDirectory: path.join(root, 'dist') });
+  const sourcePackage = JSON.parse(execFileSync('git', ['show', 'HEAD:package.json'], { cwd: root, encoding: 'utf8' }));
+  if (sourcePackage.version !== require('../package.json').version) throw new Error('Commit the matching application version before preparing release source.');
+  execFileSync('git', ['diff', '--exit-code', 'HEAD', '--', 'src', 'android', 'scripts', 'package.json', 'package-lock.json', 'ANDROID-LICENSE.md', 'THIRD_PARTY_NOTICES.md'], { cwd: root, stdio: 'pipe' });
+  const directory = path.resolve(process.argv[2] || path.join(root, '.local/release-assets'));
+  const sourceName = `Cloud-Music-Source-${sourcePackage.version}.zip`;
+  execFileSync('git', ['archive', '--format=zip', `--prefix=Cloud-Music-${sourcePackage.version}/`, `--output=${path.join(directory, sourceName)}`, 'HEAD'], { cwd: root, stdio: 'pipe' });
+  const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(directory, 'SOURCE.txt'), `Application source: ${sourceName}\nGit revision: ${revision}\nRepository: https://github.com/wrench1997/Cloud-Music/tree/${revision}\nAndroid license: ANDROID-LICENSE.md\nThird-party sources: THIRD_PARTY_NOTICES.md\n`);
+  const sums = fs.readdirSync(directory).filter((name) => name !== 'SHA256SUMS.txt' && fs.statSync(path.join(directory, name)).isFile()).sort().map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')}  ${name}`);
+  fs.writeFileSync(path.join(directory, 'SHA256SUMS.txt'), sums.join('\n') + '\n');
   console.log(`Prepared Windows release and Android ${manifest.version} (${manifest.versionCode}) update assets.`);
 }
 

@@ -20,6 +20,7 @@ Actions 首次配置需要 Repository Actions Secrets：
 - `Yungan-Music-Setup-<电脑版版本>.exe`、对应 `.blockmap`、`latest.yml`。
 - `Yungan-Music-Android-<Android版本>.apk`、`android-update.json`。
 - `SHA256SUMS.txt`。
+- `Cloud-Music-Source-<电脑版版本>.zip` 和 `SOURCE.txt`：该发行版的应用源码、确切 Git revision，以及 Android 许可证和依赖源码索引。
 
 本地已有 Windows 和 Android 构建时，运行 `node scripts/release-manifest.cjs` 生成上述发布文件，默认读取 `dist/` 与 `android/app/build/outputs/apk/release/app-release.apk`，写入 `.local/release-assets/`。也可将第一个参数设为输出目录，第二个参数指定现有签名的 APK 路径。
 

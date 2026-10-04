@@ -226,6 +226,35 @@ public class GoogleDriveAuthPlugin extends Plugin {
     }
 
     // ExoPlayer calls this on its loading thread; Google Play services renews the in-memory token.
+    public static String getBackgroundAccessToken(Context context, String expectedEmail, boolean force) throws IOException {
+        session.initialize(new GoogleAccountStore(context.getNoBackupFilesDir()).read());
+        GoogleAuthSession.Snapshot saved = session.snapshot();
+        if (expectedEmail == null || saved.account == null || !expectedEmail.equalsIgnoreCase(saved.account)) {
+            throw GoogleAuthFailure.required();
+        }
+        if (saved.refreshPending) throw GoogleAuthFailure.temporary();
+        String token = saved.validToken(System.currentTimeMillis());
+        if (!force && token != null) return token;
+        GoogleAuthSession.Snapshot authorization = saved;
+        boolean ownsRefresh = false;
+        try {
+            AuthorizationClient client = Identity.getAuthorizationClient(context);
+            if (force && saved.tokenToClear != null) {
+                authorization = session.beginTokenRefresh(saved.tokenToClear, saved.generation);
+                ownsRefresh = true;
+                Tasks.await(client.clearToken(ClearTokenRequest.builder().setToken(saved.tokenToClear).build()), 30, TimeUnit.SECONDS);
+            }
+            AuthorizationResult result = Tasks.await(client.authorize(request(saved.account)), 30, TimeUnit.SECONDS);
+            if (!session.isCurrent(saved.generation)) throw GoogleAuthFailure.cancelled();
+            if (result.hasResolution()) throw GoogleAuthFailure.required();
+            return cache(result, saved.account, saved.generation, authorization.tokenRevision, ownsRefresh);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw failure(error);
+        } catch (Exception error) { throw failure(error); }
+        finally { if (ownsRefresh) session.endTokenRefresh(saved.generation, authorization.tokenRevision); }
+    }
+
     public static String getPlaybackAccessToken(Context context) throws IOException {
         GoogleAuthSession.Snapshot saved = session.snapshot();
         if (saved.refreshPending) throw GoogleAuthFailure.temporary();

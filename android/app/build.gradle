@@ -4,12 +4,14 @@ android {
     namespace = "com.music.player"
     compileSdk = rootProject.ext.compileSdkVersion
     buildFeatures { buildConfig true }
+    testBuildType = project.findProperty('nativeTestBuildType') ?: 'debug'
     defaultConfig {
         applicationId "com.music.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
-        versionName "3.2.6"
+        ndk { abiFilters 'arm64-v8a' }
+        versionCode 12
+        versionName "3.3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -17,6 +19,7 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    packaging { jniLibs { useLegacyPackaging = true } }
     signingConfigs {
         githubRelease {
             if (System.getenv('ANDROID_KEYSTORE_PATH')) {
@@ -43,6 +46,13 @@ repositories {
 }
 
 dependencies {
+    implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+    implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1'
+    // Pin maintained Java utility versions instead of the wrapper's old transitive releases.
+    implementation 'commons-io:commons-io:2.19.0'
+    implementation 'org.apache.commons:commons-compress:1.27.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
+    testImplementation 'org.json:json:20250517'
     implementation "com.google.android.gms:play-services-auth:22.0.0"
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
