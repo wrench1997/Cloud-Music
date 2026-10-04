@@ -1,9 +1,11 @@
 {
   "name": "electron-nextjs-music",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop music player built with Electron, Next.js and SQLite",
   "main": "electron/main.js",
   "scripts": {
+    "media:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-media-tools.ps1",
+    "media:server": "node scripts/download-server.cjs --lan",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -44,6 +46,7 @@
     "wait-on": "^8.0.2"
   },
   "build": {
+    "extraResources": [{ "from": ".local/media-tools", "to": "media-tools", "filter": ["yt-dlp.exe", "ffmpeg.exe", "ffprobe.exe", "node.exe"] }],
     "appId": "com.music.player",
     "productName": "Yungan Music",
     "directories": {

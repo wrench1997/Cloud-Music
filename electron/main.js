@@ -10,6 +10,7 @@ let db;
 let pendingOpenFile = null;
 let musicTray;
 let isQuitting = false;
+let downloadService;
 const googleAuth = createGoogleAuth({ app, shell, safeStorage, dialog, getWindow: () => mainWindow });
 // 支持的音频格式：MP3, WAV, FLAC, OGG, M4A, AAC, WMA, APE, DSD, AIFF, ALAC, OPUS, AMR
 const supportedAudioExtensions = new Set([
@@ -168,6 +169,7 @@ app.on('before-quit', () => {
   isQuitting = true;
   musicTray?.destroy();
   googleAuth.dispose();
+  downloadService?.dispose();
 });
 
 ipcMain.on('player-state', (event, state) => {
@@ -183,6 +185,18 @@ for (const method of ['status', 'importConfig', 'configure', 'openSetup', 'signI
 }
 
 // IPC 处理程序
+ipcMain.handle('downloads-connect', async (event, options) => {
+  if (event.sender !== mainWindow?.webContents) throw new Error('无效的应用窗口。');
+  if (!downloadService) {
+    const { createDownloadService } = require('./download-service');
+    downloadService = createDownloadService({
+      toolsDir: app.isPackaged ? path.join(process.resourcesPath, 'media-tools') : path.join(__dirname, '../.local/media-tools'),
+      outputDir: path.join(app.getPath('downloads'), 'Yungan Music'),
+    });
+  }
+  return downloadService.connect({ lan: options?.lan === true });
+});
+
 ipcMain.handle('get-all-songs', () => {
   const stmt = db.prepare('SELECT * FROM songs ORDER BY title');
   return stmt.all();

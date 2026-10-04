@@ -19,7 +19,25 @@ npm run dev
 
 首次使用需要配置自己的 Google OAuth 客户端。网页端将 `.env.example` 复制为 `.env.local` 并填写 Web 客户端 ID；桌面端在应用登录页导入 Desktop app OAuth JSON。详细步骤见 [Google Drive 配置说明](Google%20Drive%20配置说明.md)。本地凭据不包含在仓库中。
 
-## 构建
+## Spotify / YouTube Music 歌单
+
+登录页或曲库侧栏打开“Spotify / YouTube Music 歌单”，粘贴歌单分享链接并添加，即可在官方嵌入播放器中操作。可自定义名称、保存多个歌单、移除或重新加载；链接保存在本机，无需 Google Drive 登录或认证 JSON。
+
+Spotify 的完整播放能力由平台、账号、地区和设备决定，可能仅提供试听。YouTube Music 使用 YouTube 可见播放器，私密或不允许嵌入的内容可能无法播放，Android 锁屏及后台播放不保证可用。Drive 授权不会自动登录这两个平台；可使用“在原平台打开”访问对应歌单。
+
+### 下载 MP3 与上传云端
+
+打包的 Windows 版内置转换工具。源码运行时，首次安装转换工具：`npm run media:install`。安装脚本从 yt-dlp 官方 GitHub 和 FFmpeg 官网列出的 Gyan 构建源下载，校验 SHA-256。
+
+- 电脑版 Electron 自动启动本地下载服务，MP3 保存在系统下载目录下的 `Yungan Music`。
+- 安卓和网页：电脑版点击“开启手机连接”，或电脑运行 `npm run media:server`，在手机“在线歌单 → 下载 MP3”中粘贴服务显示的配对链接。手机和电脑需在同一网络；转换期间电脑服务需要运行。Android 10+ 保存到 `Download/Yungan Music`，旧版保存到应用外部音乐目录。
+- YouTube：读取歌单（每次最多 100 首）、选择曲目、下载并转成 MP3。
+- Spotify：读取公开嵌入页面可见曲目，可按歌曲、歌手和时长批量推荐 YouTube 音源，也可逐首查找和试听；核对版本后下载 MP3。匹配音源不是 Spotify 原始音源，公开页面不一定展示全部曲目。
+- 登录 Google Drive 后，可勾选“完成后自动上传 Drive”，MP3 会上传到账号自己的 `Yungan Music` 文件夹。可手动重试失败的上传。
+
+服务仅向持有随机配对码的设备开放任务及生成文件，不接收 Google 凭据。未实现私密平台歌单授权、受保护音源解密或 Android 独立离线转换。下载能力依赖平台可访问性和 yt-dlp 支持状态。
+
+## 构建命令
 
 ```sh
 # Windows 桌面安装包

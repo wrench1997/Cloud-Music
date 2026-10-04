@@ -3,6 +3,57 @@
 @tailwind utilities;
 
 :root { --red:#ec4141; --bg:#fff; --soft:#f7f7f7; --line:#e8e8e8; --text:#222; --muted:#8b8b8b; }
+.online-page { height:100dvh; overflow:auto; padding:30px max(22px,calc((100vw - 1100px)/2)); background:#fafafa; }
+.online-header,.online-player header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.online-header h1 { margin:8px 0; font-size:30px; }
+.online-intro { color:#666; line-height:1.7; }
+.online-form { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto; align-items:end; gap:14px; margin:24px 0; }
+.online-form label { display:grid; gap:8px; font-size:13px; }
+.online-form input { width:100%; min-width:0; border:1px solid #ddd; padding:12px; border-radius:8px; background:white; }
+.online-form input:focus { outline:2px solid #ec414166; outline-offset:2px; }
+.online-form button { height:43px; }
+.online-layout { display:grid; grid-template-columns:280px minmax(0,1fr); gap:20px; }
+.online-saved,.online-player { min-width:0; border:1px solid var(--line); border-radius:14px; background:white; padding:20px; }
+.online-page h2 { margin:0 0 15px; font-size:18px; overflow-wrap:anywhere; }
+.online-saved h2 small { color:#999; font-size:13px; }
+.online-item { display:flex; align-items:center; margin:8px 0; border-radius:8px; }
+.online-item.selected { background:#fcecec; }
+.online-item>button:first-child { flex:1; min-width:0; display:flex; align-items:center; gap:10px; padding:12px 8px; text-align:left; }
+.online-item b,.online-item small { display:block; overflow-wrap:anywhere; }
+.online-item small,.online-player small { color:#888; font-size:12px; margin-top:5px; }
+.online-remove { padding:10px; font-size:22px; color:#999; }
+.provider-dot { flex:0 0 12px; width:12px; height:12px; border-radius:50%; background:#f03; }
+.provider-dot.spotify { background:#1db954; }
+.online-empty,.online-local,.online-player-hint { color:#777; font-size:13px; line-height:1.7; }
+.online-local { margin-top:24px; font-size:12px; }
+.online-player header { margin-bottom:20px; }
+.online-player header h2 { margin-bottom:4px; }
+.online-player header button { flex-shrink:0; color:var(--red); font-size:12px; }
+.online-frame { display:block; width:100%; border:0; border-radius:10px; }
+.online-frame.spotify { height:480px; }
+.online-frame.youtube { aspect-ratio:16/9; min-height:220px; }
+.online-placeholder { display:grid; place-content:center; text-align:center; min-height:350px; }
+.online-placeholder>span { font-size:60px; color:var(--red); }
+.online-login-entry { margin-top:22px; padding-top:20px; border-top:1px solid var(--line); }
+.online-login-entry p { color:#888; font-size:12px; line-height:1.6; }
+.online-page a { text-decoration:none; font-size:13px; }
+.download-panel { margin-top:24px; padding:24px; background:white; border:1px solid var(--line); border-radius:14px; font-size:13px; line-height:1.7; }
+.download-panel form,.download-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.download-panel form label { flex:1; min-width:220px; }
+.download-panel form input { display:block; width:100%; border:1px solid #ddd; border-radius:8px; padding:10px; }
+.download-panel input[type=checkbox] { accent-color:var(--red); }
+.download-track-list { max-height:450px; overflow:auto; margin:18px 0; }
+.download-track { display:flex; align-items:center; gap:12px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding:12px 0; }
+.download-track>label { display:flex; align-items:center; gap:10px; flex:1; min-width:180px; }
+.download-track b,.download-track small { display:block; }
+.download-track small { color:#888; }
+.download-track>button,.download-track a,.download-file button { color:var(--red); }
+.download-candidates { flex:1 0 100%; background:#f7f7f7; padding:10px; border-radius:8px; }
+.download-candidates>div,.download-file { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:8px 0; }
+.download-candidates span,.download-file span { flex:1; overflow-wrap:anywhere; }
+.download-candidates button { color:var(--red); }
+.download-job progress { width:100%; accent-color:var(--red); }
+@media(max-width:700px) { .online-page { padding:22px 16px; } .online-form { grid-template-columns:1fr; } .online-layout { grid-template-columns:1fr; } .online-saved,.online-player { padding:16px; } .online-frame.youtube { min-height:220px; } }
 * { box-sizing:border-box; }
 html,body,#__next { width:100%; min-height:100%; margin:0; }
 body { overflow:hidden; color:var(--text); background:var(--bg); font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }

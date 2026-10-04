@@ -11,6 +11,7 @@ const google = Object.fromEntries(['status', 'importConfig', 'configure', 'openS
 }]));
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  downloads: { connect: (options) => ipcRenderer.invoke('downloads-connect', options) },
   google,
   updatePlayerState: (state) => ipcRenderer.send('player-state', state),
   onPlayerCommand: (callback) => {
