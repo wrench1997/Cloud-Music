@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { NativeAudio } from '../lib/native-audio';
 import { recommendSource } from '../lib/source-matching';
+import { transferDownloadedFiles } from '../lib/downloaded-transfers';
 
 const CONNECTION_KEY = 'yungan-download-connection';
 
@@ -17,6 +18,7 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin, u
   const [notice, setNotice] = useState('');
   const [autoUpload, setAutoUpload] = useState(true);
   const [transfer, setTransfer] = useState('');
+  const [transferRevision, setTransferRevision] = useState(0);
   const [mobileLinks, setMobileLinks] = useState([]);
   const [nativePairing, setNativePairing] = useState(false);
   const [connecting, setConnecting] = useState(true);
@@ -82,40 +84,33 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin, u
   const transferFiles = async (config, task, forceCloud = false) => {
     if (transferBusy.current) return;
     transferBusy.current = true;
+    const startingAccount = currentAccount.current;
+    setError('');
     try {
-      for (const file of task.files) {
-        if (!active.current) break;
-        const key = `${task.id}:${file.name}`;
-        const account = currentAccount.current;
-        const uploadFile = currentUpload.current;
-        const cloudKey = `yungan-downloaded-upload:${account}:${key}`;
-        try { if (account && localStorage.getItem(cloudKey) === 'complete') handled.current.add(`cloud:${account}:${key}`); } catch {}
-        if (Capacitor.isNativePlatform() && !handled.current.has(`local:${key}`)) {
-          setTransfer(`保存到手机：${file.name}`);
-          await NativeAudio.saveMp3({ url: `${config.url}/files/${task.id}/${encodeURIComponent(file.name)}`, token: config.token, fileName: file.name });
-          handled.current.add(`local:${key}`);
-        }
-        if ((forceCloud || autoUploadRef.current) && uploadFile && !handled.current.has(`cloud:${account}:${key}`)) {
-          setTransfer(`上传到 Google Drive：${file.name}`);
-          const audio = await fetchFile(config, task, file);
-          if (currentAccount.current !== account || !active.current) break;
-          await uploadFile(audio);
-          handled.current.add(`cloud:${account}:${key}`);
-          if (account) try { localStorage.setItem(cloudKey, 'complete'); } catch {}
-          if (currentAccount.current !== account) break;
-        }
-      }
-      if (!task.files.length) return;
-      setTransfer(Capacitor.isNativePlatform() ? 'MP3 已保存到手机。' : config.integrated ? 'MP3 已生成，可点击保存到本机。' : 'MP3 已保存在电脑下载目录。');
-      if (currentUpload.current && (forceCloud || autoUploadRef.current)) setTransfer('MP3 已上传到 Google Drive / Yungan Music。');
-    } catch (requestError) { setError(`保存或上传失败：${requestError.message}；可以点击重试上传。`); }
-    finally { transferBusy.current = false; }
+      let storage;
+      try { storage = localStorage; } catch {}
+      const result = await transferDownloadedFiles(task, {
+        getAccount: () => currentAccount.current, getUpload: () => currentUpload.current,
+        shouldUpload: () => forceCloud || autoUploadRef.current, isActive: () => active.current,
+        fetchFile: (file) => fetchFile(config, task, file), handled: handled.current, storage,
+        saveLocal: Capacitor.isNativePlatform() ? (file) => NativeAudio.saveMp3({ url: `${config.url}/files/${task.id}/${encodeURIComponent(file.name)}`, token: config.token, fileName: file.name }) : null,
+        onStatus: (phase, file) => setTransfer(`${phase === 'save' ? '保存到手机' : '上传到 Google Drive'}：${file.name}`),
+      });
+      if (!active.current || !result.total) return;
+      if (result.interrupted) setTransfer('Google 账号已变更，正在重新检查上传任务。');
+      else if (result.cloudRequested) setTransfer(`已上传 ${result.uploaded} / ${result.total} 首到 Google Drive / Yungan Music。`);
+      else setTransfer(Capacitor.isNativePlatform() ? 'MP3 已保存到手机。' : config.integrated ? 'MP3 已生成，可点击保存到本机。' : 'MP3 已保存在电脑下载目录。');
+    } catch (requestError) { if (active.current) setError(`保存或上传失败：${requestError.message}；可以点击重试上传。`); }
+    finally {
+      transferBusy.current = false;
+      if (active.current && startingAccount !== currentAccount.current) setTransferRevision((value) => value + 1);
+    }
   };
   useEffect(() => {
     if (!connection || job?.state === 'running' || !job?.files?.length || !canUpload || !autoUpload) return undefined;
     const timer = setTimeout(() => transferFiles(connection, job), 0);
     return () => clearTimeout(timer);
-  }, [connection, job?.id, job?.state, canUpload, uploadAccount, autoUpload]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connection, job?.id, job?.state, canUpload, uploadAccount, autoUpload, transferRevision]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!connection || !job || job.state !== 'running') return undefined;
     let inFlight = false;

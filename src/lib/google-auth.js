@@ -1,7 +1,8 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { DRIVE_SCOPE, DRIVE_SCOPES } from './google-drive';
+import { DRIVE_SCOPES } from './google-drive';
 import { GOOGLE_SETUP_URLS, validateWebClientId } from './google-config';
 import { readWebSession, writeWebSession, clearWebSession } from './google-web-session';
+import { createGoogleTokenRequester } from './google-web-token';
 
 const GoogleDriveAuth = registerPlugin('GoogleDriveAuth');
 const WEB_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
@@ -16,6 +17,20 @@ const needsLogin = () => Object.assign(new Error('Google 登录已过期，请�
 
 function browserSessionStorage() {
   try { return window.sessionStorage; } catch { return undefined; }
+}
+
+function createWebTokenClient(clientId) {
+  return createGoogleTokenRequester({
+    oauth2: window.google.accounts.oauth2,
+    clientId,
+    scopes: DRIVE_SCOPES,
+    onToken: (result) => {
+      const session = writeWebSession(browserSessionStorage(), clientId, result);
+      webToken = session.accessToken;
+      webExpiresAt = session.expiresAt;
+      return webToken;
+    },
+  });
 }
 
 function loadGoogleIdentity() {
@@ -45,7 +60,7 @@ export async function prepareGoogleSignIn() {
   webExpiresAt = saved?.expiresAt || 0;
   await loadGoogleIdentity();
   if (!tokenClient) {
-    tokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: webClientId, scope: DRIVE_SCOPE, callback: () => {} });
+    tokenClient = createWebTokenClient(webClientId);
   }
   return { configured: true, connected: Boolean(webToken), remembersLogin: true };
 }
@@ -55,21 +70,8 @@ export function connectGoogle({ interactive = true, account } = {}) {
   if (Capacitor.isNativePlatform()) return GoogleDriveAuth.signIn({ interactive, account }).then((result) => result.accessToken);
   if (!interactive) return webToken && webExpiresAt > Date.now() + 60000 ? Promise.resolve(webToken) : Promise.reject(needsLogin());
   if (!tokenClient) return Promise.reject(Object.assign(new Error(webClientId ? 'Google 登录组件尚未就绪，请稍后重试。' : '首次连接需要 Google 应用配置，请在登录页完成设置后继续。'), { code: webClientId ? 'GOOGLE_NOT_READY' : 'GOOGLE_CONFIG_REQUIRED' }));
-  return new Promise((resolve, reject) => {
-    tokenClient.callback = (result) => {
-      if (result.error || !window.google.accounts.oauth2.hasGrantedAllScopes(result, ...DRIVE_SCOPES)) {
-        reject(new Error('请允许读取 Google Drive 目录和音乐，以及保存应用曲库。'));
-        return;
-      }
-      const session = writeWebSession(browserSessionStorage(), webClientId, result);
-      webToken = session.accessToken;
-      webExpiresAt = session.expiresAt;
-      resolve(webToken);
-    };
-    tokenClient.error_callback = (result) => reject(new Error(result.type === 'popup_closed' ? 'Google 登录已取消。' : '无法打开 Google 登录窗口，请允许此页面弹出窗口。'));
-    // Prepare the script before enabling the button, keeping this call inside the click event.
-    tokenClient.requestAccessToken({ prompt: 'select_account', ...(account ? { hint: account } : {}) });
-  });
+  // The script is ready before enabling the button; the popup request stays in the click event.
+  return tokenClient.signIn({ account });
 }
 
 export async function getGoogleAccessToken({ force = false, account } = {}) {
@@ -87,6 +89,7 @@ export async function selectGoogleAccount(email) {
 }
 
 export async function disconnectGoogle() {
+  tokenClient?.cancel();
   webToken = undefined;
   webExpiresAt = 0;
   clearWebSession(browserSessionStorage());
@@ -103,8 +106,9 @@ export async function configureGoogle(text) {
   if (Capacitor.isNativePlatform()) throw new Error('Android 客户端需要在 Google Cloud 中登记应用和签名，请使用页面的设置入口。');
   const clientId = validateWebClientId(text);
   await loadGoogleIdentity();
-  const nextClient = window.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: DRIVE_SCOPE, callback: () => {} });
+  const nextClient = createWebTokenClient(clientId);
   localStorage.setItem(WEB_CONFIG_KEY, clientId);
+  tokenClient?.cancel();
   webClientId = clientId;
   tokenClient = nextClient;
   webToken = undefined;

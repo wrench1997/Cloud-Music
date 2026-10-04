@@ -703,9 +703,10 @@ export default function Home() {
   };
 
   const uploadDownloadedMp3 = api && credentials ? async (file) => {
-    const song = await api.uploadMusic(file);
+    const generation = sessionGenerationRef.current;
     const folder = await api.ensureFolder();
-    if (folderPathRef.current.at(-1).id === folder.id) setSongs((items) => [...items.filter((item) => item.id !== song.id), song]);
+    const song = await api.uploadMusic(file);
+    if (generation === sessionGenerationRef.current && folderPathRef.current.at(-1).id === folder.id) setSongs((items) => [...items.filter((item) => item.id !== song.id), song]);
     return song;
   } : null;
   if (showOnlinePlaylists) return <OnlinePlaylists onClose={() => setShowOnlinePlaylists(false)} onUpload={uploadDownloadedMp3} uploadAccount={credentials?.accountId || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} />;

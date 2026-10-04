@@ -40,6 +40,8 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Check release version and restore the existing Android signing key
         shell: pwsh
         env:

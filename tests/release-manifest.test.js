@@ -14,7 +14,7 @@ test('release metadata binds the exact APK bytes to its Android version and incl
     assert.throws(() => prepareRelease({ directory: output, apkPath: apk, gradlePath: gradle, windowsDirectory: windows }), /metadata is missing/);
     fs.writeFileSync(path.join(windows, 'Yungan-Music-Setup-1.2.0.exe'), 'installer'); fs.writeFileSync(path.join(windows, 'latest.yml'), 'version: 1.2.0');
     fs.writeFileSync(path.join(windows, 'Yungan-Music-Setup-1.1.0.exe'), 'stale installer');
-    const result = prepareRelease({ directory: output, apkPath: apk, gradlePath: gradle, windowsDirectory: windows });
+    const result = prepareRelease({ directory: output, apkPath: apk, gradlePath: gradle, windowsDirectory: windows, windowsVersion: '1.2.0' });
     assert.equal(result.sha256, crypto.createHash('sha256').update('test apk bytes').digest('hex'));
     assert.equal(result.fileName, 'Yungan-Music-Android-3.2.0.apk');
     assert.equal(result.versionCode, 5);
