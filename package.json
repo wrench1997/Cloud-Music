@@ -7,6 +7,7 @@
     "media:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-media-tools.ps1",
     "media:server": "node scripts/download-server.cjs --lan",
     "dev": "next dev",
+    "preview": "node scripts/preview.cjs",
     "build": "next build",
     "start": "next start",
     "postinstall": "electron-rebuild -f -w better-sqlite3",

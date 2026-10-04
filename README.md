@@ -17,6 +17,8 @@ npm run electron:dev
 npm run dev
 ```
 
+静态构建预览使用 `npm run preview`，地址固定为 `http://localhost:3000`。Google Web OAuth 的已授权 JavaScript 来源必须包含完整来源（协议、主机和端口）；换成其他端口或 `127.0.0.1` 都属于不同来源，可能出现 `origin_mismatch`。
+
 首次使用需要配置自己的 Google OAuth 客户端。网页端将 `.env.example` 复制为 `.env.local` 并填写 Web 客户端 ID；桌面端在应用登录页导入 Desktop app OAuth JSON。详细步骤见 [Google Drive 配置说明](Google%20Drive%20配置说明.md)。本地凭据不包含在仓库中。
 
 ## Spotify / YouTube Music 歌单
