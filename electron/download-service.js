@@ -202,7 +202,12 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn }) {
     return { url: baseUrl, token, pairingLinks: addresses, outputDir };
   }
   function dispose() { disposed = true; for (const child of children) child.kill(); server?.closeAllConnections(); server?.close(); mobileServer?.closeAllConnections(); mobileServer?.close(); }
-  return { connect, inspect, match, startJob, dispose };
+  function handleLocal(request, response) {
+    request.headers.authorization = `Bearer ${token}`;
+    delete request.headers.origin;
+    return handle(request, response);
+  }
+  return { connect, inspect, match, startJob, dispose, handleLocal };
 }
 
 module.exports = { createDownloadService, parseSource, parseSpotifyMetadata };

@@ -18,6 +18,8 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin })
   const [autoUpload, setAutoUpload] = useState(true);
   const [transfer, setTransfer] = useState('');
   const [mobileLinks, setMobileLinks] = useState([]);
+  const [nativePairing, setNativePairing] = useState(false);
+  const [connecting, setConnecting] = useState(true);
   const handled = useRef(new Set());
   const transferBusy = useRef(false);
   const currentUpload = useRef(onUpload);
@@ -40,24 +42,31 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin })
   };
   const connect = async (config) => {
     const status = await request(config, '/status');
-    if (!status.ready) throw new Error('电脑端下载工具尚未安装。请运行 npm run media:install。');
+    if (!status.ready) throw new Error('下载组件尚未准备好，请联系应用管理员安装下载组件。');
     setConnection(config);
     if (status.jobs?.length) setJob(status.jobs.at(-1));
-    try { localStorage.setItem(CONNECTION_KEY, JSON.stringify(config)); } catch {}
-    setNotice('下载服务已连接。');
+    if (!config.integrated) try { localStorage.setItem(CONNECTION_KEY, JSON.stringify(config)); } catch {}
+    setNotice(config.integrated ? '下载功能已就绪。' : '下载服务已连接。');
+  };
+  const connectAutomatically = async () => {
+    setConnecting(true); setError('');
+    try {
+      if (window.electronAPI?.downloads) await connect(await window.electronAPI.downloads.connect());
+      else if (Capacitor.isNativePlatform()) {
+        setNativePairing(true);
+        const saved = JSON.parse(localStorage.getItem(CONNECTION_KEY) || 'null');
+        if (saved?.url && saved?.token) await connect(saved);
+      } else {
+        const response = await fetch('/api/download/bootstrap', { signal: AbortSignal.timeout(10000), cache: 'no-store' });
+        if (!response.ok) throw new Error('暂时无法连接下载功能，请稍后重试。');
+        await connect(await response.json());
+      }
+    } catch (requestError) { if (active.current) setError(requestError.message); }
+    finally { if (active.current) setConnecting(false); }
   };
   useEffect(() => {
     active.current = true;
-    Promise.resolve().then(async () => {
-      try {
-        if (window.electronAPI?.downloads) {
-          await connect(await window.electronAPI.downloads.connect());
-        } else {
-          const saved = JSON.parse(localStorage.getItem(CONNECTION_KEY) || 'null');
-          if (saved?.url && saved?.token) await connect(saved);
-        }
-      } catch (requestError) { if (active.current) setError(requestError.message); }
-    });
+    Promise.resolve().then(connectAutomatically);
     return () => { active.current = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -154,7 +163,8 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin })
 
   return <section className="download-panel" aria-label="下载 MP3 并上传云端">
     <h2>下载 MP3 · 云端保存</h2>
-    {!connection && <><p>安卓和网页连接电脑上的下载服务；电脑 Electron 版自动连接。电脑先运行 <code>npm run media:install</code>，再运行 <code>npm run media:server</code>，手机和电脑连接同一网络。</p>
+    {!connection && !nativePairing && <p>{connecting ? '正在准备下载功能…' : <button className="outline-button" onClick={connectAutomatically}>重新连接</button>}</p>}
+    {!connection && nativePairing && <><p>当前安卓版本需要连接电脑下载服务。</p>
       <form onSubmit={(event) => { event.preventDefault(); perform(async () => {
         const parsed = new URL(pairing.trim());
         if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !/^[a-f0-9]{48}$/.test(parsed.hash.slice(1))) throw new Error('请粘贴电脑显示的完整配对链接（含 # 后的配对码）。');
@@ -188,7 +198,7 @@ export default function PlaylistDownloads({ playlist, onUpload, onGoogleLogin })
         {job.files.map((file) => <div className="download-file" key={file.name}><span>{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</span><button disabled={busy} onClick={() => saveFile(file)}>保存 MP3</button></div>)}
         {Boolean(job.files.length) && <button className="outline-button" disabled={!onUpload || busy || job.state === 'running'} onClick={() => transferFiles(connection, job, true)}>上传 / 重试上传到 Drive</button>}
       </div>}
-      <button className="config-button" onClick={() => { setConnection(null); try { localStorage.removeItem(CONNECTION_KEY); } catch {} }}>更换下载服务</button>
+      {nativePairing && <button className="config-button" onClick={() => { setConnection(null); try { localStorage.removeItem(CONNECTION_KEY); } catch {} }}>更换下载服务</button>}
     </>}
     {notice && <p role="status">{notice}</p>}{transfer && <p role="status">{transfer}</p>}{error && <p className="login-error" role="alert">{error}</p>}
   </section>;

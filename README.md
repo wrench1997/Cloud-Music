@@ -11,13 +11,13 @@ npm ci
 npm run electron:dev
 ```
 
-仅启动网页：
+启动完整网页版（前端和下载后端由同一个进程提供）：
 
 ```sh
-npm run dev
+npm run web
 ```
 
-静态构建预览使用 `npm run preview`，地址固定为 `http://localhost:3000`。Google Web OAuth 的已授权 JavaScript 来源必须包含完整来源（协议、主机和端口）；换成其他端口或 `127.0.0.1` 都属于不同来源，可能出现 `origin_mismatch`。
+已有构建可直接使用 `npm start` 或 `npm run preview`，地址固定为 `http://localhost:3000`。网页自动连接同源下载接口，无需另开下载服务或填写配对链接。`npm run dev` 仅用于 Next.js 前端热更新。Google Web OAuth 的已授权 JavaScript 来源必须包含完整来源（协议、主机和端口）；换成其他端口或 `127.0.0.1` 都属于不同来源，可能出现 `origin_mismatch`。
 
 首次使用需要配置自己的 Google OAuth 客户端。网页端将 `.env.example` 复制为 `.env.local` 并填写 Web 客户端 ID；桌面端在应用登录页导入 Desktop app OAuth JSON。详细步骤见 [Google Drive 配置说明](Google%20Drive%20配置说明.md)。本地凭据不包含在仓库中。
 
@@ -32,12 +32,13 @@ Spotify 的完整播放能力由平台、账号、地区和设备决定，可能
 打包的 Windows 版内置转换工具。源码运行时，首次安装转换工具：`npm run media:install`。安装脚本从 yt-dlp 官方 GitHub 和 FFmpeg 官网列出的 Gyan 构建源下载，校验 SHA-256。
 
 - 电脑版 Electron 自动启动本地下载服务，MP3 保存在系统下载目录下的 `Yungan Music`。
-- 安卓和网页：电脑版点击“开启手机连接”，或电脑运行 `npm run media:server`，在手机“在线歌单 → 下载 MP3”中粘贴服务显示的配对链接。手机和电脑需在同一网络；转换期间电脑服务需要运行。Android 10+ 保存到 `Download/Yungan Music`，旧版保存到应用外部音乐目录。
+- 网页：页面与下载后端一起启动，MP3 保存在 `.local/downloads`，可在页面保存到浏览器下载目录。后端自动连接，不显示启动命令或配对框。目前服务仅监听本机，尚未部署到公网。
+- 当前安卓版本：电脑版点击“开启手机连接”，或电脑运行 `npm run media:server`，在手机“在线歌单 → 下载 MP3”中粘贴服务显示的配对链接。手机和电脑需在同一网络；转换期间电脑服务需要运行。Android 10+ 保存到 `Download/Yungan Music`，旧版保存到应用外部音乐目录。
 - YouTube：读取歌单（每次最多 100 首）、选择曲目、下载并转成 MP3。
 - Spotify：读取公开嵌入页面可见曲目，可按歌曲、歌手和时长批量推荐 YouTube 音源，也可逐首查找和试听；核对版本后下载 MP3。匹配音源不是 Spotify 原始音源，公开页面不一定展示全部曲目。
 - 登录 Google Drive 后，可勾选“完成后自动上传 Drive”，MP3 会上传到账号自己的 `Yungan Music` 文件夹。可手动重试失败的上传。
 
-服务仅向持有随机配对码的设备开放任务及生成文件，不接收 Google 凭据。未实现私密平台歌单授权、受保护音源解密或 Android 独立离线转换。下载能力依赖平台可访问性和 yt-dlp 支持状态。
+网页下载接口限制为本机同源访问，电脑端共享服务使用随机配对码；下载后端不接收 Google 凭据。未实现私密平台歌单授权、受保护音源解密或 Android 独立离线转换。下载能力依赖平台可访问性和 yt-dlp 支持状态。
 
 ## 构建命令
 
