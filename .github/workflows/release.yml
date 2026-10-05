@@ -61,6 +61,12 @@ jobs:
       - name: Install dependencies and verify code
         shell: pwsh
         run: |
+          $originalTemp = node -p "require('os').tmpdir()"
+          $canonicalTemp = node -p "require('fs').realpathSync(require('os').tmpdir())"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the runner temporary directory' }
+          $env:TEMP = $canonicalTemp
+          $env:TMP = $canonicalTemp
+          Write-Host "Runner temporary directory: $originalTemp -> $canonicalTemp"
           npm ci
           if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
           npm test
