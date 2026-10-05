@@ -114,6 +114,87 @@ test('401 retries once using a refreshed token, while 403 never retries or start
   assert.equal(calls, 1);
 });
 
+test('song deletion checks capabilities and moves one verified music file to trash without permanent deletion', async () => {
+  const calls = [];
+  const api = createGoogleDriveApi(async () => 'token', { fetchImpl: async (input, options) => {
+    const url = new URL(input);
+    calls.push({ url, options });
+    assert.equal(url.pathname, '/drive/v3/files/song-one');
+    assert.equal(url.searchParams.get('supportsAllDrives'), 'true');
+    assert.equal(options.assertCurrent, undefined);
+    if (options.method === 'PATCH') {
+      assert.deepEqual(JSON.parse(options.body), { trashed: true });
+      assert.equal(options.headers['Content-Type'], 'application/json');
+      return json({ id: 'song-one', trashed: true });
+    }
+    assert.match(url.searchParams.get('fields'), /capabilities\(canTrash\)/);
+    return json({ id: 'song-one', name: '歌手 - 歌曲.mp3', mimeType: 'audio/mpeg', trashed: false, capabilities: { canTrash: true } });
+  } });
+  assert.deepEqual(await api.trashSong('song-one'), { id: 'song-one', trashed: true });
+  assert.deepEqual(calls.map(({ options }) => options.method || 'GET'), ['GET', 'PATCH']);
+});
+
+test('trash fails closed for a folder, missing capability, unsafe ID or root without a write', async () => {
+  for (const file of [
+    { id: 'track', name: 'Folder.mp3', mimeType: 'application/vnd.google-apps.folder', capabilities: { canTrash: true } },
+    { id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg', capabilities: { canTrash: false } },
+    { id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg' },
+  ]) {
+    let reads = 0;
+    const api = createGoogleDriveApi(async () => 'token', { fetchImpl: async (_input, options) => {
+      assert.equal(options.method, undefined); reads += 1; return json(file);
+    } });
+    await assert.rejects(api.trashSong('track'), /歌曲文件|权限/);
+    await assert.rejects(api.trashSong('root'), /单首/);
+    await assert.rejects(api.trashSong('../wrong'), /无效/);
+    assert.equal(reads, 1);
+  }
+});
+
+test('already trashed songs are acknowledged without another write and denied writes explain current scopes', async () => {
+  let calls = 0;
+  const api = createGoogleDriveApi(async () => 'token', { fetchImpl: async (_input, options) => {
+    calls += 1;
+    assert.equal(options.method, undefined);
+    return json({ id: 'gone', name: 'Track.mp3', mimeType: 'audio/mpeg', trashed: true });
+  } });
+  assert.deepEqual(await api.trashSong('gone'), { id: 'gone', trashed: true });
+  assert.equal(calls, 1);
+  const denied = createGoogleDriveApi(async () => 'token', { fetchImpl: async (_input, options) => options.method === 'PATCH'
+    ? json({ error: { errors: [{ reason: 'insufficientPermissions' }] } }, 403)
+    : json({ id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg', capabilities: { canTrash: true } }) });
+  await assert.rejects(denied.trashSong('track'), { status: 403, message: /当前授权只能管理/ });
+});
+
+test('switching the account or directory during token refresh prevents the trash mutation', async () => {
+  let current = true; let tokens = 0; let requests = 0;
+  const api = createGoogleDriveApi(async () => { tokens += 1; if (tokens === 2) current = false; return 'token'; }, { fetchImpl: async (_input, options) => {
+    requests += 1;
+    assert.equal(options.method, undefined);
+    return json({ id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg', capabilities: { canTrash: true } });
+  } });
+  const assertCurrent = () => { if (!current) throw Object.assign(new Error('scope changed'), { code: 'SONG_ACTION_STALE' }); };
+  await assert.rejects(api.trashSong('track', { assertCurrent }), { code: 'SONG_ACTION_STALE' });
+  assert.equal(requests, 1);
+});
+
+test('a cancelled trash check cannot reach PATCH and a wrong completion is never reported as success', async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  const cancelled = createGoogleDriveApi(async () => 'token', { fetchImpl: async (_input, options) => {
+    requests += 1;
+    assert.equal(options.method, undefined);
+    controller.abort();
+    return json({ id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg', capabilities: { canTrash: true } });
+  } });
+  await assert.rejects(cancelled.trashSong('track', { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(requests, 1);
+  const wrong = createGoogleDriveApi(async () => 'token', { fetchImpl: async (_input, options) => options.method === 'PATCH'
+    ? json({ id: 'different', trashed: true })
+    : json({ id: 'track', name: 'Track.mp3', mimeType: 'audio/mpeg', capabilities: { canTrash: true } }) });
+  await assert.rejects(wrong.trashSong('track'), /未确认/);
+});
+
 test('resumable upload recovers the actual offset after a partially accepted interrupted chunk', async () => {
   const file = new File([new Uint8Array(10 * 1024 * 1024)], '歌手 - 歌曲.mp3', { type: 'audio/mpeg' });
   const ranges = [];

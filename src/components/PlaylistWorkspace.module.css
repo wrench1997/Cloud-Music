@@ -1,31 +1,19 @@
-.modeTabs {
-  display: flex;
-  gap: 6px;
-  width: fit-content;
-  padding: 5px;
-  margin: 18px 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #f1f2f4;
-}
-
-.modeTabs button {
-  min-height: 42px;
-  padding: 10px 20px;
-  border-radius: 8px;
-  color: #666;
-  font-weight: 600;
-}
-
-.modeTabs button[aria-pressed='true'] {
-  background: white;
-  color: var(--red);
-  box-shadow: 0 1px 5px #0000000d;
-}
-
 .workspace {
   align-items: start;
 }
+
+.singleColumn { grid-template-columns:minmax(0,1fr); }
+.importCard { padding:22px; margin:22px 0; border:1px solid #eee3e8; border-radius:24px; background:#fff; box-shadow:0 5px 20px #73314905; }
+.importHeading { display:flex; align-items:center; gap:12px; }
+.importHeading>span { display:grid; place-items:center; flex-shrink:0; width:44px; height:44px; border-radius:14px; color:#d84c67; background:#fff0f4; font-size:27px; }
+.importHeading h2 { margin:0; font-size:18px; }
+.importHeading p { margin:4px 0 0; color:#99858e; font-size:12px; }
+.importCard :global(.online-form) { grid-template-columns:minmax(0,1fr) auto; margin:18px 0 0; }
+.optionalName { grid-column:1/-1; color:#967e8a; font-size:12px; }
+.optionalName summary { min-height:36px; cursor:pointer; }
+.optionalName label { padding-top:7px; }
+.selectedPlaylist>div { flex:1; min-width:0; }
+.originalButton { min-height:44px; padding:9px 13px; border:1px solid #eee3e8; border-radius:14px; color:#987282; background:#fff; font-size:12px; }
 
 .content {
   min-width: 0;
@@ -69,18 +57,15 @@
     order: -1;
   }
 
-  .modeTabs {
-    width: 100%;
-  }
-
-  .modeTabs button {
-    flex: 1;
-    padding: 10px 8px;
-  }
-
   .downloadArea > :global(.download-panel) {
     padding: 18px 16px;
   }
+
+  .importCard { padding:18px 16px; margin-top:18px; border-radius:22px; }
+  .importCard :global(.online-form) { grid-template-columns:minmax(0,1fr); gap:12px; }
+  .importCard :global(.online-form)>button { min-height:48px; width:100%; }
+  .selectedPlaylist { gap:9px; padding:0 3px 12px; }
+  .originalButton { padding:9px 11px; font-size:12px; }
 
   .saved {
     max-height: 340px;

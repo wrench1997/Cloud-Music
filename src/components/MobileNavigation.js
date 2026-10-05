@@ -1,56 +1,26 @@
-import { useEffect, useRef } from 'react';
 import styles from './MobileNavigation.module.css';
 
 const paths = {
-  menu: 'M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z',
-  close: 'm6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z',
-  library: 'M3 5h7l2 2h9v13H3zm2 2v11h14V9h-7l-2-2z',
+  library: 'M4 4h6v16H4V4Zm8 0h3v16h-3V4Zm5 1 3-1 4 15-3 1-4-15Z',
   download: 'M11 3h2v10l3-3 1.4 1.4L12 17l-5.4-5.6L8 10l3 3zM4 18h2v2h12v-2h2v4H4z',
-  discover: 'M10 3a7 7 0 1 0 4.9 12l5.7 5.7 1.4-1.4-5.7-5.7A7 7 0 0 0 10 3zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10z',
-  settings: 'M12 2l2.2 3.2 3.8-.3.3 3.8L22 11v2l-3.7 2.3-.3 3.8-3.8-.3L12 22l-2.2-3.2-3.8.3-.3-3.8L2 13v-2l3.7-2.3.3-3.8 3.8.3zm0 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  discover: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm4.5 5.5L14 14l-6.5 2.5L10 10l6.5-2.5ZM12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z',
+  account: 'M12 3a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 12c-5 0-8 2.5-8 5v1h16v-1c0-2.5-3-5-8-5Z',
 };
 
-function MenuIcon({ name }) {
-  return <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={paths[name]} /></svg>;
+function NavigationIcon({ name }) {
+  return <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={paths[name]} fillRule="evenodd" /></svg>;
 }
 
-export default function MobileNavigation({ open, onOpen, onClose, active, onLibrary, onPlaylists, onDiscover, onSettings, email, hasUpdate, standalone }) {
-  const panel = useRef(null);
-  const trigger = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const previous = document.activeElement;
-    panel.current?.querySelector('button')?.focus();
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
-      if (event.key !== 'Tab') return;
-      const buttons = panel.current?.querySelectorAll('button:not(:disabled)');
-      if (!buttons?.length) return;
-      const first = buttons[0];
-      const last = buttons[buttons.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('keydown', onKeyDown); if (previous?.isConnected) previous.focus(); };
-  }, [open, onClose]);
-
-  return <>
-    <button ref={trigger} className={`${styles.trigger} ${standalone ? styles.standalone : ''}`} onClick={onOpen} aria-label="打开导航菜单" aria-expanded={open} aria-controls="app-navigation">
-      <MenuIcon name="menu" />{hasUpdate && <span className={styles.dot} aria-label="有应用更新" />}
-    </button>
-    {open && <div className={styles.backdrop} onClick={onClose}>
-      <aside id="app-navigation" ref={panel} className={styles.drawer} role="dialog" aria-modal="true" aria-label="导航菜单" onClick={(event) => event.stopPropagation()}>
-        <header><div className={styles.brand}><span>♪</span><strong>云感音乐</strong></div><button onClick={onClose} aria-label="关闭导航菜单"><MenuIcon name="close" /></button></header>
-        <div className={styles.account}><span className={styles.avatar}>{email ? email[0].toUpperCase() : '♪'}</span><div><b>{email ? 'Google Drive 已连接' : '欢迎使用云感音乐'}</b><small>{email || '歌单导入无需登录'}</small></div></div>
-        <nav aria-label="应用功能">
-          <button aria-current={active === 'library' ? 'page' : undefined} onClick={onLibrary}><MenuIcon name="library" /><span><b>云端曲库</b><small>我的音乐和收藏</small></span></button>
-          <button aria-current={active === 'discover' ? 'page' : undefined} onClick={onDiscover}><MenuIcon name="discover" /><span><b>发现音乐</b><small>按收藏找歌 · 选音源下载</small></span></button>
-          <button aria-current={active === 'playlists' ? 'page' : undefined} onClick={onPlaylists}><MenuIcon name="download" /><span><b>歌单下载</b><small>Spotify / YouTube Music</small></span></button>
-          <button aria-current={active === 'settings' ? 'page' : undefined} onClick={onSettings}><MenuIcon name="settings" /><span><b>设置</b><small>账号 · 应用更新</small></span>{hasUpdate && <em>有更新</em>}</button>
-        </nav>
-        <p className={styles.footer}>音乐，随时随地。</p>
-      </aside>
-    </div>}
-  </>;
+export default function MobileNavigation({ active, onLibrary, onPlaylists, onDiscover, onSettings, email, hasUpdate, standalone }) {
+  const items = [
+    { id: 'library', label: '曲库', icon: 'library', action: onLibrary },
+    { id: 'discover', label: '发现', icon: 'discover', action: onDiscover },
+    { id: 'playlists', label: '下载', icon: 'download', action: onPlaylists },
+    { id: 'settings', label: '我的', icon: 'account', action: onSettings },
+  ];
+  return <nav className={`${styles.navigation} ${standalone ? styles.standalone : ''}`} aria-label="主要导航">
+    {items.map((item) => <button key={item.id} type="button" aria-current={active === item.id ? 'page' : undefined} onClick={item.action} title={item.id === 'settings' && email ? email : item.label}>
+      <span className={styles.icon}><NavigationIcon name={item.icon} />{item.id === 'settings' && hasUpdate && <span className={styles.dot} aria-label="有应用更新" />}</span><span>{item.label}</span>
+    </button>)}
+  </nav>;
 }

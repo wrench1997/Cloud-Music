@@ -4,7 +4,7 @@ import { discoveryMoods, formatDiscoveryDuration, platformSearchLink, radioSeeds
 import { parsePlaylistLink } from '../lib/online-playlists';
 import styles from './MusicDiscovery.module.css';
 
-export default function MusicDiscovery({ taste = {}, playlists = [], available, canDownload, onSearch, onRadio, onMatchTrack, onInspectSpotify, onDownload, onChooseSpotifyTrack }) {
+export default function MusicDiscovery({ taste = {}, playlists = [], available, canDownload, onSearch, onRadio, onMatchTrack, onInspectSpotify, onDownload, onChooseSpotifyTrack, incomingRadio, viewActive = true }) {
   const [view, setView] = useState('radio');
   const [query, setQuery] = useState('');
   const [radioLink, setRadioLink] = useState('');
@@ -27,6 +27,7 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
   const previewPanel = useRef(null);
   const resultsPanel = useRef(null);
   const alive = useRef(true);
+  const startedIncomingRadio = useRef('');
   useEffect(() => { const sequence = requestSequence; alive.current = true; return () => { alive.current = false; sequence.current++; }; }, []);
   useEffect(() => { if (spotifyCandidates) { candidatePanel.current?.scrollIntoView({ block: 'nearest' }); candidatePanel.current?.focus({ preventScroll: true }); } }, [spotifyCandidates]);
   useEffect(() => { if (preview) previewPanel.current?.scrollIntoView({ block: 'nearest' }); }, [preview]);
@@ -64,6 +65,12 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
     } catch (requestError) { if (alive.current && sequence === requestSequence.current) setError(`电台暂时无法载入：${requestError.message}`); }
     finally { if (alive.current && sequence === requestSequence.current) setBusy(false); }
   };
+  const incomingKey = incomingRadio?.videoId ? `${incomingRadio.nonce ?? ''}:${incomingRadio.videoId}` : '';
+  useEffect(() => {
+    if (!available || !incomingKey || startedIncomingRadio.current === incomingKey) return;
+    startedIncomingRadio.current = incomingKey;
+    Promise.resolve().then(() => startRadio(incomingRadio));
+  }, [available, incomingKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const nextStation = () => {
     if (!stations.length) return;
     const current = stations.findIndex((station) => station.videoId === context?.seed?.videoId);
@@ -104,12 +111,12 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
   const changePage = (next) => context.type === 'radio' ? startRadio(context.seed, next, context.radioId) : search(context.query, context.seed, next);
 
   return <section className={styles.discovery} aria-label="发现音乐">
-    <div className={styles.hero}><span className={styles.sparkle} aria-hidden="true">✦</span><div><span className={styles.eyebrow}>听见喜欢的歌，再向外探索</span><h2>歌曲电台 · Spotify 榜单</h2><p>以一首歌开启 YouTube 推荐电台，延伸到其他歌手；也可以从 Spotify 实时榜单挑歌试听、下载。</p></div><button className="red-button" disabled={!available || busy || !stations.length} onClick={nextStation}>{context?.type === 'radio' ? stations.length > 1 ? '换一首开启电台' : '刷新这个电台' : '开启我的歌曲电台'}</button></div>
+    <div className={styles.hero}><span className={styles.sparkle} aria-hidden="true">✦</span><div><span className={styles.eyebrow}>听见喜欢的歌，再向外探索</span><h2>下一首，会喜欢什么？</h2><p>从歌曲电台发现相似音乐，或听听 Spotify 榜单正在流行什么。</p></div><button className="red-button" disabled={!available || busy || !stations.length} onClick={nextStation}>{busy ? '正在找歌…' : context?.type === 'radio' ? stations.length > 1 ? '换一首开启电台' : '刷新这个电台' : '开启我的歌曲电台'}</button></div>
     <div className={styles.discoveryTabs} role="group" aria-label="发现方式"><button aria-pressed={view === 'radio'} disabled={busy} onClick={() => changeView('radio')}>歌曲电台</button><button aria-pressed={view === 'charts'} disabled={busy} onClick={() => changeView('charts')}>Spotify 榜单</button><button aria-pressed={view === 'manual'} disabled={busy} onClick={() => changeView('manual')}>手动找歌</button></div>
-    {!available && <p className={styles.connectionHint} role="status">先连接下方下载服务，就可以读取电台和榜单、试听选曲并下载。原平台链接仍可直接打开。</p>}
+    {!available && <p className={styles.connectionHint} role="status">正在准备找歌功能，准备好后即可试听、下载与收藏新的音乐。</p>}
     {view === 'radio' && <>
       <div className={styles.seedHeader}><h3>选择电台起点</h3><span>从当前歌曲、最近播放和收藏中选一首</span></div>
-      {stations.length ? <div className={styles.radioSeeds}>{stations.map((station) => <button key={station.videoId} disabled={!available || busy} aria-pressed={context?.type === 'radio' && context.seed.videoId === station.videoId} onClick={() => startRadio(station)}><span className={styles.cover}>{station.coverUrl ? <Image src={station.coverUrl} width={70} height={70} unoptimized alt="" referrerPolicy="no-referrer" /> : '♫'}</span><span><b>{station.title}</b><small>{station.artist || 'YouTube 音源'}</small><small>{station.reason} · 开启电台</small></span></button>)}</div> : <p className={styles.empty}>曲库里还没有带 YouTube 音源的歌曲。可以先从 Spotify 榜单挑歌开启电台，或在下面粘贴喜欢的 YouTube 单曲链接。</p>}
+      {stations.length ? <div className={styles.radioSeeds}>{stations.map((station) => <button key={station.videoId} disabled={!available || busy} aria-pressed={context?.type === 'radio' && context.seed.videoId === station.videoId} onClick={() => startRadio(station)}><span className={styles.cover}>{station.coverUrl ? <Image src={station.coverUrl} width={70} height={70} unoptimized alt="" referrerPolicy="no-referrer" /> : '♫'}</span><span><b>{station.title}</b><small>{station.artist || 'YouTube 音源'}</small><small>{station.reason} · 开启电台</small></span></button>)}</div> : <div className={styles.emptyStart}><span aria-hidden="true">♫</span><div><b>先挑一首喜欢的歌</b><p>从 Spotify 榜单挑歌，或用歌名搜索，就能找到电台起点。</p></div><button className="outline-button" onClick={() => changeView('charts')}>看看 Spotify 榜单</button></div>}
       <form className={styles.radioStart} onSubmit={(event) => {
         event.preventDefault(); const id = youtubeVideoId(radioLink);
         if (!id) { setError('请粘贴 YouTube / YouTube Music 单曲分享链接。'); return; }
@@ -141,7 +148,7 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
       {visible.map((entry) => <article className={styles.track} key={entry.url}>
         <label className={styles.trackChoice}><input type="checkbox" checked={Boolean(selected[entry.url])} onChange={(event) => setSelected((value) => ({ ...value, [entry.url]: event.target.checked }))} aria-label={`选择 ${entry.title}`} /><span className={styles.cover}>{entry.coverUrl ? <Image src={entry.coverUrl} width={70} height={70} unoptimized alt="" loading="lazy" referrerPolicy="no-referrer" /> : '♫'}</span><span className={styles.trackText}><b>{entry.title}</b><small>{entry.artistIsChannel ? '频道：' : ''}{entry.artist || '歌手待确认'} · {formatDiscoveryDuration(entry.duration)}</small><small className={styles.reason}>{entry.reason}{entry.inLibrary ? ' · 已在曲库' : ''}</small></span></label>
         <div className={styles.trackActions}><button type="button" className="outline-button" onClick={() => setPreview(entry)}>试听</button><button type="button" className="outline-button" disabled={busy || !available} onClick={() => startRadio({ ...entry, videoId: youtubeVideoId(entry.url), reason: '从发现歌曲继续探索' })}>接着开台</button><button type="button" className="outline-button" disabled={busy || !canDownload} onClick={() => download([entry])}>下载 MP3</button></div>
-        {preview?.url === entry.url && <div className={styles.preview} ref={previewPanel}><div><b>试听：{entry.title}</b><button type="button" onClick={() => setPreview(null)} aria-label="关闭试听">×</button></div><iframe src={`https://www.youtube.com/embed/${youtubeVideoId(entry.url)}?playsinline=1&rel=0`} title={`${entry.title} YouTube 试听`} allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /></div>}
+        {viewActive && preview?.url === entry.url && <div className={styles.preview} ref={previewPanel}><div><b>试听：{entry.title}</b><button type="button" onClick={() => setPreview(null)} aria-label="关闭试听">×</button></div><iframe src={`https://www.youtube.com/embed/${youtubeVideoId(entry.url)}?playsinline=1&rel=0`} title={`${entry.title} YouTube 试听`} allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /><a href={entry.url} target="_blank" rel="noopener noreferrer">在 YouTube 打开试听 ↗</a></div>}
       </article>)}
       <div className={styles.downloadBar}><span>已选 {selectedTracks.length} 首</span><button className="red-button" disabled={!selectedTracks.length || busy || !canDownload} onClick={() => download(selectedTracks)}>下载所选 MP3</button></div><div className={styles.pagination}><button className="outline-button" disabled={page <= 1 || busy} onClick={() => changePage(page - 1)}>上一页</button><span>第 {page} 页</span><button className="outline-button" disabled={!hasMore || busy} onClick={() => changePage(page + 1)}>下一页</button></div>
     </div>}

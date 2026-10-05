@@ -1,0 +1,15 @@
+.page { background:#fcfafb; }
+.accountCard { background:linear-gradient(145deg,#fff,#fff8fa); }
+.syncState { display:flex; align-items:flex-start; gap:9px; padding:12px 0; color:#75656f; font-size:13px; line-height:1.6; }
+.connectedDot { flex:0 0 auto; width:7px; height:7px; margin-top:7px; border-radius:50%; background:#48a17c; }
+.accountOptions { margin-top:12px; border-top:1px solid #f1e7ec; }
+.accountOptions summary { display:flex; align-items:center; min-height:48px; color:#8c6979; cursor:pointer; font-size:13px; }
+.accountOptions summary::after { margin-left:auto; content:'⌄'; font-size:20px; }
+.accountOptions[open] summary::after { content:'⌃'; }
+.signOut { min-height:46px; padding:11px 16px; border:1px solid #ece3e7; border-radius:14px; color:#8b747f; font-size:13px; }
+.confirm { padding:15px; margin-top:12px; border:1px solid #eed7e0; border-radius:15px; background:#fff3f7; color:#866071; }
+.confirm p { margin:0 0 8px; font-size:13px; line-height:1.7; }
+.confirm button { min-height:44px; padding:10px 14px; margin-right:8px; border-radius:12px; color:#b74670; background:#fff; font-size:13px; }
+.aboutLinks { display:flex; flex-wrap:wrap; gap:12px; }
+.aboutLinks a { display:flex; align-items:center; min-height:44px; padding:9px 12px; border-radius:12px; color:#9e5573; background:#fff5f8; text-decoration:none; font-size:13px; }
+@media(max-width:760px) { .page { padding-top:calc(28px + env(safe-area-inset-top)); padding-bottom:calc(var(--mobile-navigation-height,68px) + var(--mobile-player-height,102px) + env(safe-area-inset-bottom) + 28px); } }

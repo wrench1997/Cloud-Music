@@ -1,0 +1,28 @@
+Cloud-Music Android built-in media engine
+
+The Android application bundles yausername/youtubedl-android 0.18.1
+(library and ffmpeg), licensed under GNU GPL version 3.
+Source: https://github.com/yausername/youtubedl-android/tree/0.18.1
+License: https://www.gnu.org/licenses/gpl-3.0.txt
+Cloud-Music corresponding application source is published alongside each
+release at https://github.com/wrench1997/Cloud-Music .
+
+yt-dlp is embedded as the official Unix zipimport release, including its
+Python code and JavaScript challenge solver dependencies. The build script
+verifies the official SHA-256 checksum before placing it in APK resources.
+yt-dlp source and notices: https://github.com/yt-dlp/yt-dlp
+yt-dlp license: Unlicense; third-party bundled dependencies retain their
+respective licenses documented in the upstream release.
+
+The bundled FFmpeg 7.1.1 ARM64 build enables --enable-gpl and
+--enable-version3. It is not an LGPL-only build. Its exact configure string
+is packaged in licenses/FFmpeg-build-config.txt. Enabled dependencies retain
+their own licenses. FFmpeg licensing: https://ffmpeg.org/legal.html .
+
+Python, FFmpeg, QuickJS, Kotlin, AndroidX, Jackson, Commons IO, and Commons
+Compress retain their upstream licenses. FFmpeg binary source and build
+instructions are supplied by youtubedl-android's BUILD_FFMPEG.md and
+BUILD_PYTHON.md. This notice does not replace or remove upstream licenses.
+
+Native code is loaded from the APK installation directory. No other app,
+computer download service, or separately installed Python runtime is needed.

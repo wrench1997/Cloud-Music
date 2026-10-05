@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu } = require('electron');
 const { createGoogleAuth } = require('./google-auth');
 const { createMusicTray } = require('./tray');
+const { attachYouTubeEmbedIdentity } = require('./youtube-embed');
+const { createMusicCache } = require('./music-cache');
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
@@ -12,7 +14,8 @@ let musicTray;
 let isQuitting = false;
 let downloadService;
 let appUpdater;
-const googleAuth = createGoogleAuth({ app, shell, safeStorage, dialog, getWindow: () => mainWindow });
+let musicCache;
+const googleAuth = createGoogleAuth({ app, shell, safeStorage, dialog, getWindow: () => mainWindow, getMusicCache: () => musicCache });
 // 支持的音频格式：MP3, WAV, FLAC, OGG, M4A, AAC, WMA, APE, DSD, AIFF, ALAC, OPUS, AMR
 const supportedAudioExtensions = new Set([
   '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac',
@@ -94,6 +97,8 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0b0709'
   });
+  if (process.platform === 'win32') mainWindow.removeMenu();
+  attachYouTubeEmbedIdentity(mainWindow);
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   
@@ -141,6 +146,8 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('com.music.player');
     googleAuth.initialize();
+    musicCache = createMusicCache({ directory: path.join(app.getPath('userData'), 'music-cache-v1'),
+      getIdentity: () => googleAuth.cacheIdentity(), getSource: (args) => googleAuth.cacheSource(args) });
     initDatabase();
     createWindow();
     if (process.platform === 'win32') {
@@ -178,6 +185,7 @@ app.on('before-quit', () => {
   googleAuth.dispose();
   downloadService?.dispose();
   appUpdater?.dispose();
+  musicCache?.dispose();
 });
 
 for (const method of ['status', 'check', 'install']) {
@@ -185,6 +193,16 @@ for (const method of ['status', 'check', 'install']) {
     if (event.sender !== mainWindow?.webContents) throw new Error('无效的应用窗口。');
     if (!appUpdater) return { state: 'unsupported' };
     return appUpdater[method]();
+  });
+}
+
+for (const method of ['list', 'cache', 'remove']) {
+  ipcMain.handle(`music-cache-${method}`, async (event, args) => {
+    if (event.sender !== mainWindow?.webContents) return { ok: false, error: { message: '无效的应用窗口。' } };
+    try {
+      if (!musicCache) throw new Error('本机音乐缓存尚未准备好。');
+      return { ok: true, data: await musicCache[method](args) };
+    } catch (error) { return { ok: false, error: { message: error.message, code: error.code } }; }
   });
 }
 

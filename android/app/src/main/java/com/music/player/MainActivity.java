@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeAudioPlugin.class);
         registerPlugin(GoogleDriveAuthPlugin.class);
         registerPlugin(AppUpdaterPlugin.class);
+        registerPlugin(NativeDownloadsPlugin.class);
         super.onCreate(savedInstanceState);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {

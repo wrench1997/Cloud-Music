@@ -18,6 +18,7 @@ async function desktop() {
   class Window extends EventEmitter {
     constructor(options) { super(); this.options = options; this.webContents = new EventEmitter(); this.webContents.send = (...args) => { this.lastMessage = args; }; window = this; }
     loadFile(file) { this.file = file; }
+    removeMenu() {}
     hide() { this.hidden = true; }
     show() { this.hidden = false; }
     focus() { this.focused = true; }
@@ -44,12 +45,15 @@ async function desktop() {
     close() { this.closed = true; }
   }
   const ipcMain = new EventEmitter();
-  ipcMain.handle = () => {};
+  ipcMain.handlers = new Map();
+  ipcMain.handle = (name, handler) => ipcMain.handlers.set(name, handler);
   const electron = { app, BrowserWindow: Window, Tray, Menu: { buildFromTemplate: (items) => items }, ipcMain };
   const requireModule = (name) => {
     if (name === 'electron') return electron;
     if (name === 'better-sqlite3') return Database;
     if (name === './tray') return { createMusicTray };
+    if (name === './youtube-embed') return { attachYouTubeEmbedIdentity() {} };
+    if (name === './music-cache') return { createMusicCache: () => ({ list: async () => ({ songs: [] }), dispose() {} }) };
     if (name === './google-auth') return { createGoogleAuth: () => ({ initialize() {}, dispose() { disposed = true; } }) };
     if (name === './app-updater') return { createAppUpdater: () => ({ start() {}, dispose() {} }) };
     if (name === 'electron-updater') return { autoUpdater: {} };
@@ -92,5 +96,16 @@ test('desktop accepts playback updates only from its own renderer and routes tra
   window.close();
   app.emit('second-instance', {}, []);
   assert.equal(window.hidden, false);
+  app.quit();
+});
+
+test('offline cache IPC uses the preload response contract and rejects foreign frames', async () => {
+  const { app, window, ipcMain } = await desktop();
+  const list = ipcMain.handlers.get('music-cache-list');
+  assert.equal((await list({ sender: window.webContents })).ok, true);
+  assert.deepEqual((await list({ sender: window.webContents })).data, { songs: [] });
+  const rejected = await list({ sender: {} });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error.message, /无效/);
   app.quit();
 });

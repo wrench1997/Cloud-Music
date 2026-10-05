@@ -1,0 +1,15 @@
+.failures { margin: 18px 0; }
+.failures h3 { margin: 0 0 8px; font-size: 16px; }
+.failures p { font-size: 13px; line-height: 1.6; color: var(--muted, #747474); }
+.failure { padding: 16px; margin: 12px 0; border: 1px solid var(--line, #e7e7e7); border-radius: 16px; background: var(--panel, #fff); }
+.artist { display: block; margin-top: 4px; font-size: 12px; color: var(--muted, #747474); }
+.failure .reason { color: var(--red, #ef4444); font-weight: 600; margin-bottom: 0; }
+.actions, .candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.failures button, .failures a { min-height: 44px; }
+.failures a { display: inline-flex; align-items: center; color: var(--red, #ef4444); font-size: 13px; }
+.candidates { margin-top: 12px; padding: 12px; border-radius: 12px; background: #f7f7f8; }
+.candidate { padding: 10px 0; border-top: 1px solid #e6e6e8; }
+.candidate span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.candidate strong, .candidate small { display: block; }
+.candidate small { color: #747474; margin-top: 4px; }
+.failure .selection { color: #b53643; }

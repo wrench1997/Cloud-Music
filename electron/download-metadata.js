@@ -29,6 +29,7 @@ function normalizeTrack(entry, url = entry.url) {
     duration: Math.max(0, Math.min(86400, Number(entry.duration) || 0)),
     coverUrl: safeCoverUrl(entry.coverUrl || entry.cover || entry.thumbnail),
     metadataProvider: id || entry.metadataProvider === 'spotify' ? 'spotify' : 'youtube', ...(id ? { spotifyId: id } : {}),
+    ...(entry.preserveMetadata === true ? { preserveMetadata: true } : {}),
   };
 }
 function spotifyEntity(html) {
@@ -56,12 +57,14 @@ async function enrichSpotifyTrack(track, fetchImpl = fetch) {
     coverUrl: track.coverUrl || details.coverUrl, duration: track.duration || details.duration };
 }
 function metadataFor(track, info = {}) {
-  const original = track.metadataProvider === 'spotify';
+  const original = track.metadataProvider === 'spotify' || track.preserveMetadata === true;
   const versions = (value) => text(value).toLowerCase().match(/\b(?:slowed|slow|sped|remix|live|acoustic|instrumental|nightcore|super|ultra)\b/g)?.sort().join() || '';
   const musicTitle = text(info.track);
   const title = original || versions(track.title) && versions(track.title) !== versions(musicTitle) ? track.title : musicTitle || track.title;
   const artist = original ? track.artist || artistName(info.artist || info.artists) : artistName(info.artist || info.artists) || track.artist || text(info.uploader);
-  return { title, artist, album: track.album || text(info.album), duration: Number(info.duration) || track.duration || 0,
+  const actualDuration = Number(info.duration), previousDuration = Number(track.duration);
+  const duration = Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : Number.isFinite(previousDuration) && previousDuration > 0 ? previousDuration : 0;
+  return { title, artist, album: track.album || text(info.album), duration,
     coverUrl: track.coverUrl || safeCoverUrl(info.thumbnail) || `https://i.ytimg.com/vi/${videoId(track.url)}/hqdefault.jpg`,
     sourceUrl: track.url, metadataProvider: track.metadataProvider, ...(track.spotifyId ? { spotifyId: track.spotifyId } : {}) };
 }

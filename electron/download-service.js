@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const os = require('node:os');
 const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
+const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls } = require('../src/lib/download-failure-policy');
 
 function searchOptions(value = {}) {
   if (typeof value.query !== 'string' || value.query.length > 300) throw new Error('请输入 1 至 300 个字符的歌曲或歌手名称。');
@@ -90,6 +91,11 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   function readFiles(directory, known = []) {
     return fs.readdirSync(directory).filter((name) => name.endsWith('.mp3') && !name.startsWith('.') && fs.lstatSync(path.join(directory, name)).isFile() && fs.statSync(path.join(directory, name)).size > 0).map((name) => ({ ...known.find((file) => file.name === name), name, size: fs.statSync(path.join(directory, name)).size }));
   }
+  function missingSources(sources, files, knownFailures = [], fallback = '下载未完成，可重试。') {
+    const completed = completedSourceUrls(files);
+    const errors = new Map(knownFailures.map((failure) => [canonicalYoutubeSource(failure.url), failure.error]));
+    return sources.filter((source) => !completed.has(canonicalYoutubeSource(source.url))).map((source) => ({ ...source, error: errors.get(canonicalYoutubeSource(source.url)) || fallback }));
+  }
   function persistJob(job) {
     const directory = path.join(outputDir, job.id);
     const temporary = path.join(directory, '.job.json.tmp');
@@ -109,15 +115,17 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
         const match = name.match(/-([\w-]{11})\.(?:webm|m4a|opus|ogg)$/);
         return match && fs.lstatSync(path.join(directory, name)).isFile() ? [{ url: `https://www.youtube.com/watch?v=${match[1]}`, title: name.slice(0, -match[0].length).replace(/_/g, ' '), error: '音源已下载，MP3 转换未完成。' }] : [];
       });
-      const unfinished = saved?.state === 'running' && Array.isArray(saved.sources) ? saved.sources.filter((source) => !files.some((file) => file.name.endsWith(`-${new URL(source.url).searchParams.get('v')}.mp3`))).map((source) => ({ ...source, error: '上次下载被中断，请重试。' })) : (saved?.failures || pending);
-      const failures = unfinished.filter((item) => {
-        try { return parseSource(item.url).provider === 'youtube' && typeof item.title === 'string'; } catch { return false; }
+      const knownFailures = (Array.isArray(saved?.failures) ? saved.failures : pending).filter((item) => {
+        try { return Boolean(canonicalYoutubeSource(item.url)) && typeof item.title === 'string'; } catch { return false; }
       }).slice(0, 100);
-      files = files.filter((file) => !failures.some((failure) => file.name.endsWith(`-${new URL(failure.url).searchParams.get('v')}.mp3`)));
+      const savedSources = Array.isArray(saved?.sources) ? saved.sources.filter((source) => { try { return Boolean(canonicalYoutubeSource(source.url)); } catch { return false; } }).map((source) => normalizeTrack(source, canonicalYoutubeSource(source.url))) : [];
+      const sources = savedSources.length ? savedSources : knownFailures.map((source) => normalizeTrack(source, canonicalYoutubeSource(source.url)));
+      const cancelled = saved?.state === 'cancelled' || saved?.cancelled === true;
+      const failures = missingSources(sources, files, knownFailures, cancelled ? '下载已取消，可继续未完成曲目。' : saved?.state === 'running' ? '上次下载被中断，请重试。' : '没有找到已完成 MP3，请重试。');
       if (!files.length && !failures.length) continue;
-      const total = Math.max(Number(saved?.total) || 0, files.length + failures.length);
-      const savedSources = Array.isArray(saved?.sources) ? saved.sources.filter((source) => { try { return parseSource(source.url).provider === 'youtube'; } catch { return false; } }).map((source) => normalizeTrack(source, parseSource(source.url).url)) : [];
-      const job = { id, createdAt: Number(saved?.createdAt) || fs.statSync(directory).birthtimeMs, state: failures.length ? (files.length ? 'partial' : 'failed') : 'complete', phase: 'finished', title: String(saved?.title || failures[0]?.title || files[0]?.name || '已保存的下载'), completed: files.length, total, progress: Math.floor(files.length / total * 100), cancelled: false, files, failures, sources: savedSources.length ? savedSources : failures.map((source) => normalizeTrack(source)), metadataRepair: saved?.metadataRepair, error: failures.map((item) => `${item.title}: ${item.error || '下载未完成。'}`).join('\n').slice(0, 3000) };
+      const total = Math.max(Number(saved?.total) || 0, files.length + failures.length, sources.length);
+      const state = cancelled ? 'cancelled' : !failures.length && files.length >= total ? 'complete' : files.length ? 'partial' : 'failed';
+      const job = { id, createdAt: Number(saved?.createdAt) || fs.statSync(directory).birthtimeMs, state, phase: 'finished', title: String(saved?.title || failures[0]?.title || files[0]?.name || '已保存的下载'), completed: files.length, total, progress: state === 'complete' ? 100 : Math.min(99, Math.floor(files.length / total * 100)), cancelled, files, failures, sources, metadataRepair: saved?.metadataRepair, error: failures.map((item) => `${item.title}: ${item.error}`).join('\n').slice(0, 3000) };
       jobs.set(id, job);
     } catch { /* An incomplete manifest must not prevent startup. */ }
   }
@@ -265,19 +273,22 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
         job.progress = Math.min(99, Math.floor((alreadyCompleted + index + 1) / job.total * 100));
         persistJob(job);
       }
-      job.state = job.cancelled ? 'cancelled' : job.failures.length ? (job.completed ? 'partial' : 'failed') : 'complete';
+      job.files = readFiles(directory, job.files).filter((file) => job.files.some((completed) => completed.name === file.name));
+      job.completed = job.files.length;
+      job.failures = missingSources(job.sources, job.files, job.failures, job.cancelled ? '下载已取消，可继续未完成曲目。' : '下载未完成，可重试。');
+      job.state = job.cancelled ? 'cancelled' : job.failures.length || job.completed < job.total ? (job.completed ? 'partial' : 'failed') : 'complete';
       job.phase = 'finished';
-      job.progress = job.state === 'complete' ? 100 : Math.floor(job.completed / job.total * 100);
+      job.progress = job.state === 'complete' ? 100 : Math.min(99, Math.floor(job.completed / job.total * 100));
       job.error = job.failures.map((failure) => `${failure.title}: ${failure.error}`).join('\n').slice(0, 3000);
       persistJob(job);
     })().catch((error) => { job.state = 'failed'; job.error = error.message; });
   }
-  function retryJob(job) {
+  function retryJob(job, input = {}) {
     if (job.state === 'running' || [...jobs.values()].some((item) => item.state === 'running')) throw new Error('请等待当前下载任务完成。');
-    if (!job.failures.length) throw new Error('没有需要重试的曲目。');
+    const plan = prepareFailedDownloadRetry(job, input);
     toolArgs();
-    const sources = job.failures.map((source) => normalizeTrack(source));
-    job.sources = [...job.sources.filter((source) => !sources.some((retry) => retry.url === source.url)), ...sources];
+    const sources = plan.pending.map((source) => normalizeTrack(source));
+    job.sources = plan.sources;
     job.failures = []; job.error = ''; job.cancelled = false; job.state = 'running';
     persistJob(job);
     executeJob(job, sources, path.join(outputDir, job.id));
@@ -365,13 +376,13 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       if (request.method === 'POST' && retryRoute) {
         const job = jobs.get(retryRoute[1]);
         if (!job) { reply(response, 404, { error: '任务不存在。' }); return; }
-        reply(response, 200, retryJob(job)); return;
+        reply(response, 200, retryJob(job, await readJson(request))); return;
       }
       if (jobRoute) {
         const job = jobs.get(jobRoute[1]);
         if (!job) { reply(response, 404, { error: '任务不存在。' }); return; }
         if (request.method === 'GET') { reply(response, 200, publicJob(job)); return; }
-        if (request.method === 'DELETE') { job.cancelled = true; for (const child of children) child.kill(); reply(response, 200, publicJob(job)); return; }
+        if (request.method === 'DELETE') { job.cancelled = true; persistJob(job); for (const child of children) child.kill(); reply(response, 200, publicJob(job)); return; }
       }
       const fileRoute = url.pathname.match(/^\/files\/([\w-]+)\/(.+)$/);
       if (request.method === 'GET' && fileRoute) {

@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { NativeAudio } from '../lib/native-audio';
+import { NativeDownloads, nativeDownloadSong } from '../lib/native-downloads';
 import { App } from '@capacitor/app';
 import OnlinePlaylists from '../components/OnlinePlaylists';
 import AppSettings from '../components/AppSettings';
@@ -11,7 +12,12 @@ import { useAppUpdates } from '../components/AppUpdates';
 import SongArtwork from '../components/SongArtwork';
 import SeekBar from '../components/SeekBar';
 import PlaybackModeControl from '../components/PlaybackModeControl';
+import SongContextMenu, { ConfirmSongTrash } from '../components/SongContextMenu';
+import { songActionScopeMatches, withoutSong, removeSongFromMusicState, removeSongFromShuffle } from '../lib/song-actions';
 import { playbackMode, nativePlaybackMode, nextTrackIndex, shuffleBag, seekPosition } from '../lib/playback-policy';
+import { youtubeVideoId } from '../lib/music-discovery';
+import { cloudMusicState, mergeCloudMusicState } from '../lib/music-library-state';
+import { findCachedSong, withCachedSong, offlineQueue } from '../lib/desktop-cache-policy';
 import { createGoogleDriveApi, isMusicFile, MUSIC_ACCEPT, ROOT_FOLDER, normalizeState } from '../lib/google-drive';
 import { locationKey, normalizeFolderPath, openVerifiedGoogleLibrary } from '../lib/google-library';
 import { createGoogleLoginRecovery, isTransientError } from '../lib/google-login-recovery';
@@ -128,6 +134,9 @@ export default function Home() {
   const [downloadNotice, setDownloadNotice] = useState('');
   const [credentials, setCredentials] = useState(null);
   const [songs, setSongs] = useState([]);
+  const [localSongs, setLocalSongs] = useState([]);
+  const [librarySource, setLibrarySource] = useState('cloud');
+  const [sourceRadio, setSourceRadio] = useState(null);
   const [folders, setFolders] = useState([]);
   const [folderPath, setFolderPath] = useState([ROOT_FOLDER]);
   const [playbackQueue, setPlaybackQueue] = useState([]);
@@ -162,6 +171,12 @@ export default function Home() {
   const [trackReady, setTrackReady] = useState(false);
   const [upload, setUpload] = useState(null);
   const [syncStatus, setSyncStatus] = useState('');
+  const [songMenu, setSongMenu] = useState(null);
+  const [trashConfirmation, setTrashConfirmation] = useState(null);
+  const [trashingSong, setTrashingSong] = useState(false);
+  const [trashError, setTrashError] = useState('');
+  const [songActionNotice, setSongActionNotice] = useState('');
+  const [cacheBusyId, setCacheBusyId] = useState('');
   const audioRef = useRef(null);
   const contentRef = useRef(null);
   const nativeLoadedRef = useRef(false);
@@ -177,6 +192,7 @@ export default function Home() {
   const syncRevisionRef = useRef(0);
   const playerActionsRef = useRef({});
   const directoryRequestRef = useRef(0);
+  const localLibraryRevisionRef = useRef(0);
   const folderPathRef = useRef([ROOT_FOLDER]);
   const loginRecoveryRef = useRef(null);
   const startLoginRecoveryRef = useRef(null);
@@ -190,11 +206,107 @@ export default function Home() {
   const seekRequestRef = useRef(null);
   const seekRevisionRef = useRef(0);
   const modeChangingRef = useRef(0);
+  const songActionAccountRef = useRef('');
+  const songActionSourceRef = useRef('cloud');
+  const playbackStateRef = useRef({ currentSong: null, queue: [] });
+  const trashControllerRef = useRef(null);
+  const trashedSongIdsRef = useRef(new Set());
+
+  useLayoutEffect(() => {
+    songActionAccountRef.current = credentials?.accountId || '';
+    songActionSourceRef.current = librarySource;
+    playbackStateRef.current = { currentSong, queue: playbackQueue };
+  }, [credentials, librarySource, currentSong, playbackQueue]);
 
   const api = credentials ? driveApi : null;
+  const isLocalLibrary = librarySource === 'local';
+  const librarySongs = isLocalLibrary ? localSongs : songs;
+  const libraryTitle = isLocalLibrary ? '本机音乐' : folderPath.at(-1).name;
   const isGoogle = credentials?.provider === 'google';
   const accountName = credentials?.username || '我的账号';
   const effectiveDuration = duration > 0 ? duration : Number(currentSong?.duration) || 0;
+
+  const currentSongActionScope = () => ({
+    generation: sessionGenerationRef.current,
+    accountId: songActionAccountRef.current,
+    directoryRequest: directoryRequestRef.current,
+    folderId: folderPathRef.current.at(-1).id,
+    source: songActionSourceRef.current,
+  });
+
+  const closeSongMenu = useCallback((restoreFocus = false) => {
+    setSongMenu((menu) => { if (restoreFocus && menu?.anchor?.isConnected) menu.anchor.focus(); return null; });
+  }, []);
+
+  useEffect(() => {
+    trashControllerRef.current?.abort();
+    Promise.resolve().then(() => { closeSongMenu(); setTrashConfirmation(null); setTrashError(''); });
+  }, [credentials, driveApi, folderPath, librarySource, showSettings, showOnlinePlaylists, busy, closeSongMenu]);
+
+  useEffect(() => () => trashControllerRef.current?.abort(), []);
+
+  const openSongMenu = (event, song) => {
+    if (busy || trashingSong || cacheBusyId) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fromKeyboard = event.type === 'keydown' || (!event.clientX && !event.clientY);
+    const cached = !song.localUri && credentials ? findCachedSong(localSongs, song, credentials.accountId) : null;
+    setSongMenu({ song: cached ? withCachedSong(song, cached) : song, api, scope: currentSongActionScope(), email: credentials?.email || '',
+      canTrash: !song.id.startsWith('cache:') && (!song.originalAccount || song.originalAccount.id === credentials?.accountId) && isGoogle && Boolean(api) && songs.some((item) => item.id === song.id),
+      anchor: event.currentTarget, x: fromKeyboard ? rect.left + Math.min(90, rect.width / 2) : event.clientX,
+      y: fromKeyboard ? rect.top + rect.height / 2 : event.clientY });
+  };
+
+  const songMenuKeyDown = (event, song) => {
+    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openSongMenu(event, song);
+  };
+
+  const assertSongActionCurrent = (context) => {
+    if (!songActionScopeMatches(context.scope, currentSongActionScope())) {
+      throw Object.assign(new Error('账号或目录已变更，请在当前曲库重新选择歌曲。'), { code: 'SONG_ACTION_STALE' });
+    }
+  };
+
+  const reloadLocalLibrary = useCallback(async () => {
+    const native = Capacitor.isNativePlatform();
+    const cache = window.electronAPI?.musicCache;
+    if (!native && !cache) return [];
+    const revision = ++localLibraryRevisionRef.current;
+    const result = await (native ? NativeDownloads.listLibrary() : cache.list());
+    const next = (result.songs || []).map((song) => ({ ...song, provider: 'local',
+      coverUrl: song.coverUri ? Capacitor.convertFileSrc(song.coverUri) : song.coverUrl || '' }));
+    if (revision === localLibraryRevisionRef.current) {
+      setLocalSongs((items) => native ? next : [...next, ...items.filter((song) => !song.cacheId)]);
+      setCurrentSong((song) => song?.localUri ? next.find((item) => item.id === song.id) || song : song);
+    }
+    return next;
+  }, []);
+
+  useEffect(() => {
+    const native = Capacitor.isNativePlatform();
+    if (!native && !window.electronAPI?.musicCache) return undefined;
+    let alive = true;
+    let listener;
+    Promise.resolve().then(async () => {
+      if (native) {
+        try { setLibrarySource(localStorage.getItem('yungan-library-source') === 'cloud' ? 'cloud' : 'local'); } catch { setLibrarySource('local'); }
+      }
+      try {
+        const state = normalizeState(JSON.parse(localStorage.getItem('yungan-state:local') || 'null'));
+        musicStateRef.current = state; setFavorites(state.favorites); setRecent(state.recent);
+      } catch {}
+      try {
+        const cached = await reloadLocalLibrary();
+        if (alive && !native && (cached.length || localStorage.getItem('yungan-library-source') === 'local')) setLibrarySource('local');
+      } catch {}
+      if (!native) return;
+      try {
+        const handle = await NativeDownloads.addListener('libraryChanged', () => reloadLocalLibrary().catch(() => {}));
+        if (alive) listener = handle; else handle.remove();
+      } catch {}
+    });
+    return () => { alive = false; listener?.remove(); };
+  }, [reloadLocalLibrary]);
 
   useEffect(() => {
     let active = true;
@@ -233,23 +345,23 @@ export default function Home() {
   };
 
   const visibleSongs = useMemo(() => {
-    let source = songs;
-    if (activeNav === '我的收藏') source = songs.filter((song) => favorites.includes(song.id));
-    if (activeNav === '最近播放') source = recent.map((id) => songs.find((song) => song.id === id)).filter(Boolean);
+    let source = librarySongs;
+    if (activeNav === '我的收藏') source = librarySongs.filter((song) => favorites.includes(song.id));
+    if (activeNav === '最近播放') source = recent.map((id) => librarySongs.find((song) => song.id === id)).filter(Boolean);
     const normalized = query.trim().toLowerCase();
     if (!normalized) return source;
     return source.filter((song) => [song.title, song.artist, song.album]
       .some((field) => String(field || '').toLowerCase().includes(normalized)));
-  }, [songs, query, activeNav, favorites, recent]);
+  }, [librarySongs, query, activeNav, favorites, recent]);
 
   const nativeQueue = (queue) => queue.map((song) => ({
     id: song.id,
     title: song.title || '未知歌曲',
     artist: song.artist || '未知歌手',
     album: song.album || '',
-    cover: song.coverUrl || '',
+    cover: song.coverUri || song.coverUrl || '',
     durationMillis: Math.round((Number(song.duration) || 0) * 1000),
-    url: api.mediaUrl(song.id),
+    url: song.localUri || api?.mediaUrl(song.id) || '',
   }));
 
   const applyMusicState = (state) => {
@@ -263,15 +375,18 @@ export default function Home() {
   };
 
   const persistMusicState = useCallback((state = musicStateRef.current) => {
-    if (!credentials || !api) return;
     musicStateRef.current = state;
+    try { localStorage.setItem('yungan-state:local', JSON.stringify(state)); } catch {}
+    if (!credentials || !api) {
+      return;
+    }
     const key = stateKey(credentials);
     localStorage.setItem(key, JSON.stringify({ ...state, dirty: isGoogle }));
     if (!isGoogle) return;
     const generation = sessionGenerationRef.current;
     const revision = ++syncRevisionRef.current;
     setSyncStatus('正在同步…');
-    api.saveState(state).then(() => {
+    api.saveState(cloudMusicState(state)).then(() => {
       if (generation !== sessionGenerationRef.current || revision !== syncRevisionRef.current) return;
       localStorage.setItem(key, JSON.stringify({ ...state, dirty: false }));
       setSyncStatus('收藏与播放记录已同步');
@@ -289,14 +404,20 @@ export default function Home() {
   }, [persistMusicState]);
 
   const applyDirectory = useCallback((directory, path, session) => {
+    for (const song of directory.songs) trashedSongIdsRef.current.delete(song.id);
     folderPathRef.current = path;
     setFolderPath(path);
     setFolders(directory.folders);
     setSongs(directory.songs);
     localStorage.setItem(locationKey(session.accountId), JSON.stringify(path));
-    setCurrentSong((song) => song ? directory.songs.find((item) => item.id === song.id) || song : directory.songs[0] || null);
-    setPlaybackQueue((queue) => queue.map((song) => directory.songs.find((item) => item.id === song.id) || song));
-    nativeQueueRef.current = nativeQueueRef.current.map((song) => directory.songs.find((item) => item.id === song.id) || song);
+    const refreshedSong = (song) => {
+      const fresh = directory.songs.find((item) => item.id === song.id);
+      if (song.localUri) return fresh && song.originalAccount?.id === session.accountId ? withCachedSong(fresh, song) : song;
+      return fresh || song;
+    };
+    setCurrentSong((song) => song ? refreshedSong(song) : directory.songs[0] || null);
+    setPlaybackQueue((queue) => queue.map(refreshedSong));
+    nativeQueueRef.current = nativeQueueRef.current.map(refreshedSong);
   }, []);
 
   const openDirectory = useCallback(async (path, nextApi = api) => {
@@ -336,6 +457,7 @@ export default function Home() {
   };
 
   const loadLibrary = async (nextApi = api) => {
+    if (isLocalLibrary) { await reloadLocalLibrary().catch((failure) => setError(failure.message)); return; }
     if (!nextApi) return;
     setBusy(true);
     setError('');
@@ -351,8 +473,9 @@ export default function Home() {
       if (generation !== sessionGenerationRef.current || request !== directoryRequestRef.current) return;
       applyDirectory(directory, path, credentials);
       if (remoteState && revision === syncRevisionRef.current && !readCachedState(credentials)?.dirty) {
-        applyMusicState(remoteState);
-        localStorage.setItem(stateKey(credentials), JSON.stringify({ ...remoteState, dirty: false }));
+        const merged = mergeCloudMusicState(normalizeState(remoteState), musicStateRef.current);
+        applyMusicState(merged);
+        localStorage.setItem(stateKey(credentials), JSON.stringify({ ...merged, dirty: false }));
       }
       if (account) setStorageQuota(account.storageQuota);
     } catch (requestError) {
@@ -360,6 +483,15 @@ export default function Home() {
     } finally {
       if (generation === sessionGenerationRef.current && request === directoryRequestRef.current) setBusy(false);
     }
+  };
+
+  const retainOfflinePlayback = () => {
+    const snapshot = playbackStateRef.current;
+    const queue = offlineQueue(snapshot.queue, snapshot.currentSong, localSongs, credentials?.accountId);
+    setPlaybackQueue(queue);
+    playbackStateRef.current = { ...snapshot, queue };
+    const index = Math.max(0, queue.findIndex((song) => song.id === snapshot.currentSong?.id));
+    shuffleRef.current = { key: queue.map((song) => song.id).join('|'), remaining: shuffleBag(queue.length, index), history: snapshot.currentSong ? [snapshot.currentSong.id] : [] };
   };
 
   const googleLogin = async ({ interactive = true, account } = {}) => {
@@ -375,12 +507,13 @@ export default function Home() {
     setSetupMessage('');
     setCredentials(null);
     setDriveApi(null);
-    setCurrentSong(null);
-    setPlaybackQueue([]);
+    const keepLocalPlayback = Boolean(currentSong?.localUri);
+    if (keepLocalPlayback && !Capacitor.isNativePlatform()) retainOfflinePlayback();
+    if (!keepLocalPlayback) { setCurrentSong(null); setPlaybackQueue([]); }
     setShowPlayer(false);
     setShowQueue(false);
     uploadControllerRef.current?.abort();
-    if (interactive) {
+    if (interactive && !keepLocalPlayback) {
       ++playbackRequestRef.current;
       playbackControllerRef.current?.abort();
       audioRef.current?.pause();
@@ -423,7 +556,8 @@ export default function Home() {
       });
       if (generation !== sessionGenerationRef.current) return;
       const cached = readCachedState(session);
-      const state = normalizeState(cached?.dirty || !remoteState ? cached : remoteState);
+      const cloudState = normalizeState(cached?.dirty || !remoteState ? cached : remoteState);
+      const state = mergeCloudMusicState(cloudState, musicStateRef.current);
       localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: Boolean(cached?.dirty) }));
       setCredentials(session);
       setDriveApi(nextApi);
@@ -436,7 +570,7 @@ export default function Home() {
       setSyncStatus(stateError ? '播放记录读取失败' : cached?.dirty ? '有记录待同步' : '收藏与播放记录已同步');
       if (cached?.dirty) {
         try {
-          await nextApi.saveState(state);
+          await nextApi.saveState(cloudMusicState(state));
           if (generation === sessionGenerationRef.current) {
             localStorage.setItem(stateKey(session), JSON.stringify({ ...state, dirty: false }));
             setSyncStatus('收藏与播放记录已同步');
@@ -454,7 +588,7 @@ export default function Home() {
           }
         }
       }
-      return generation === sessionGenerationRef.current ? { connected: true } : { cancelled: true };
+      return generation === sessionGenerationRef.current ? { connected: true, session } : { cancelled: true };
     } catch (requestError) {
       if (generation === sessionGenerationRef.current && requestError.code === 'GOOGLE_ACCOUNT_MISMATCH') await disconnectGoogle().catch(() => {});
       if (requestError.code === 'GOOGLE_CONFIG_REQUIRED') setShowGoogleSetup(true);
@@ -507,7 +641,10 @@ export default function Home() {
     return openGoogleSetup(destination).catch((requestError) => setError(requestError.message));
   };
 
-  const beginGoogleLogin = () => {
+  const beginGoogleLogin = (options = {}) => {
+    if (googleConfigured && options?.interactive === true) {
+      return googleLogin({ interactive: true, account: credentials?.email || (!isDesktop && !isNative ? loginEmail.trim() || undefined : undefined) });
+    }
     if (googleConfigured && rememberedLoginRef.current) {
       return startLoginRecoveryRef.current?.();
     }
@@ -521,6 +658,11 @@ export default function Home() {
     let active = true;
     let nativeListener;
     const generationCounter = sessionGenerationRef;
+    Promise.resolve().then(() => {
+      if (!active) return;
+      setIsNative(Capacitor.isNativePlatform());
+      setIsDesktop(Boolean(window.electronAPI?.google));
+    });
     // Legacy directory caches are not credentials; restore only a platform-held Google authorization.
     localStorage.removeItem('yungan-session');
     const makeRecovery = (cycle) => createGoogleLoginRecovery({
@@ -594,25 +736,25 @@ export default function Home() {
     App.addListener('backButton', () => {
       if (menuOpen) {
         setMenuOpen(false);
-      } else if (showSettings) {
-        setShowSettings(false);
-      } else if (showOnlinePlaylists) {
-        setShowOnlinePlaylists(false);
       } else if (showQueue) {
         setShowQueue(false);
       } else if (showPlayer) {
         setShowPlayer(false);
-      } else if (credentials && folderPath.length > 1 && !busy && !upload) {
+      } else if (showSettings) {
+        setShowSettings(false);
+      } else if (showOnlinePlaylists) {
+        setShowOnlinePlaylists(false);
+      } else if (!isLocalLibrary && credentials && folderPath.length > 1 && !busy && !upload) {
         openDirectory(folderPath.slice(0, -1));
       } else {
         App.minimizeApp();
       }
     }).then((handle) => { if (active) listener = handle; else handle.remove(); });
     return () => { active = false; listener?.remove(); };
-  }, [isNative, menuOpen, showSettings, showOnlinePlaylists, showPlayer, showQueue, credentials, folderPath, busy, upload, openDirectory]);
+  }, [isNative, isLocalLibrary, menuOpen, showSettings, showOnlinePlaylists, showPlayer, showQueue, credentials, folderPath, busy, upload, openDirectory]);
 
   useEffect(() => {
-    if (!isNative || !credentials || showOnlinePlaylists) return undefined;
+    if (!isNative) return undefined;
     const generation = sessionGenerationRef.current;
     const timer = setInterval(async () => {
       if (!nativeLoadedRef.current) return;
@@ -631,25 +773,28 @@ export default function Home() {
         }
         updatePlaybackPosition(Number(state.position || 0) / 1000);
         if (Number(state.duration) > 0) setDuration(Number(state.duration) / 1000);
-        const track = nativeQueueRef.current[state.index];
+        const track = typeof state.trackId === 'string' ? nativeQueueRef.current.find((song) => song.id === state.trackId) : nativeQueueRef.current[state.index];
         if (track && track.id !== currentSong?.id) { setCurrentSong(track); rememberSong(track); }
         if (state.error) setError(state.error);
       } catch {}
     }, 750);
     return () => clearInterval(timer);
-  }, [isNative, credentials, currentSong, rememberSong, showOnlinePlaylists, updatePlaybackPosition]);
+  }, [isNative, credentials, currentSong, rememberSong, updatePlaybackPosition]);
 
-  const startSong = async (song, queue = songs, { preserveShuffle = false } = {}) => {
-    if (!api || !song) return;
-    const nextQueue = queue.some((item) => item.id === song.id) ? queue : [song];
+  const startSong = async (song, queue = librarySongs, { preserveShuffle = false } = {}) => {
+    if (!song || trashedSongIdsRef.current.has(song.id) || (!song.localUri && !api)) return;
+    const availableQueue = queue.filter((item) => !trashedSongIdsRef.current.has(item.id));
+    const nextQueue = availableQueue.some((item) => item.id === song.id) ? availableQueue : [song];
     const queueKey = nextQueue.map((item) => item.id).join('|');
     if (!preserveShuffle || shuffleRef.current.key !== queueKey) shuffleRef.current = { key: queueKey, remaining: shuffleBag(nextQueue.length, nextQueue.findIndex((item) => item.id === song.id)), history: [song.id] };
     const request = ++playbackRequestRef.current;
+    const generation = sessionGenerationRef.current;
     playbackControllerRef.current?.abort();
     playbackControllerRef.current = new AbortController();
     audioRef.current?.pause();
     setCurrentSong(song);
     setPlaybackQueue(nextQueue);
+    playbackStateRef.current = { currentSong: song, queue: nextQueue };
     setProgress(0);
     setDuration(Number(song.duration) || 0);
     seekingRef.current = false;
@@ -659,9 +804,10 @@ export default function Home() {
     setTrackReady(false);
     nativeLoadedRef.current = false;
     setLoadingTrack(true);
+    setError('');
     try {
       if (isNative) {
-        if (isGoogle) await getGoogleAccessToken({ account: credentials.email });
+        if (isGoogle && nextQueue.some((item) => !item.localUri)) await getGoogleAccessToken({ account: credentials.email });
         if (request !== playbackRequestRef.current) return;
         nativeQueueRef.current = nextQueue;
         await applyNativeMode(playModeRef.current);
@@ -671,11 +817,31 @@ export default function Home() {
         nativeLoadedRef.current = true;
       } else {
         let url;
-        if (window.electronAPI?.google) url = await window.electronAPI.google.streamUrl(song.id);
+        let resolvedSong = song;
+        if (song.localUri) url = song.localUri;
+        else if (window.electronAPI?.musicCache) {
+          try {
+            const cached = findCachedSong(localSongs, song, credentials.accountId) || await window.electronAPI.musicCache.cache({ fileId: song.id, accountId: credentials.accountId });
+            resolvedSong = withCachedSong(song, cached);
+            url = resolvedSong.localUri;
+            await reloadLocalLibrary();
+          } catch (failure) {
+            if (failure.code === 'GOOGLE_AUTH_REQUIRED' || generation !== sessionGenerationRef.current) throw failure;
+            url = await window.electronAPI.google.streamUrl({ id: song.id, skipCache: true });
+            if (request === playbackRequestRef.current) setSongActionNotice(`本机缓存暂未完成，正在在线播放：${failure.message}`);
+          }
+        }
+        else if (window.electronAPI?.google) url = await window.electronAPI.google.streamUrl(song.id);
         else url = URL.createObjectURL(await api.downloadSong(song.id, playbackControllerRef.current.signal));
-        if (request !== playbackRequestRef.current) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
+        if (request !== playbackRequestRef.current || (!song.localUri && generation !== sessionGenerationRef.current)) { if (!song.localUri && url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
+        if (resolvedSong !== song) {
+          const resolvedQueue = nextQueue.map((item) => item.id === song.id ? resolvedSong : item);
+          setCurrentSong(resolvedSong);
+          setPlaybackQueue(resolvedQueue);
+          playbackStateRef.current = { currentSong: resolvedSong, queue: resolvedQueue };
+        }
         if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = url.startsWith('blob:') ? url : '';
+        blobUrlRef.current = !song.localUri && url.startsWith('blob:') ? url : '';
         if (audioRef.current?.getAttribute('src') === url) {
           if (Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0) setDuration(audioRef.current.duration);
           audioRef.current.currentTime = 0;
@@ -696,7 +862,7 @@ export default function Home() {
   const togglePlay = async () => {
     if (!currentSong) return;
     if (loadingTrack) return;
-    if ((!isNative && !audioSrc) || (isNative && !nativeLoadedRef.current)) { await startSong(currentSong, playbackQueue.length ? playbackQueue : songs); return; }
+    if ((!isNative && !audioSrc) || (isNative && !nativeLoadedRef.current)) { await startSong(currentSong, playbackQueue.length ? playbackQueue : librarySongs); return; }
     try {
     if (isNative) {
       if (isPlaying) await NativeAudio.pause();
@@ -711,7 +877,7 @@ export default function Home() {
   };
 
   const playOffset = async (offset, automatic = false) => {
-    const queue = playbackQueue.length ? playbackQueue : songs;
+    const queue = playbackQueue.length ? playbackQueue : librarySongs;
     if (!queue.length) return;
     try {
       if (isNative && nativeLoadedRef.current) {
@@ -745,7 +911,7 @@ export default function Home() {
   const playPrevious = () => playOffset(-1);
 
   useEffect(() => {
-    playerActionsRef.current = showOnlinePlaylists ? {} : { 'toggle-play': togglePlay, next: playNext, previous: playPrevious };
+    playerActionsRef.current = { 'toggle-play': togglePlay, next: playNext, previous: playPrevious };
   });
 
   useEffect(() => window.electronAPI?.onPlayerCommand((command) => {
@@ -754,7 +920,7 @@ export default function Home() {
 
   useEffect(() => {
     window.electronAPI?.updatePlayerState({
-      canPlay: Boolean(credentials && currentSong && !loadingTrack), playing: isPlaying,
+      canPlay: Boolean((credentials || currentSong?.localUri) && currentSong && !loadingTrack), playing: isPlaying,
       title: currentSong?.title || '', artist: currentSong?.artist || '',
     });
   }, [credentials, currentSong, isPlaying, loadingTrack]);
@@ -785,7 +951,7 @@ export default function Home() {
       if (isNative) await applyNativeMode(next);
       else if (audioRef.current) audioRef.current.loop = next === 'repeat-one';
       try { localStorage.setItem('yungan-playback-mode', next); } catch {}
-      const queue = playbackQueue.length ? playbackQueue : songs;
+      const queue = playbackQueue.length ? playbackQueue : librarySongs;
       const index = queue.findIndex((song) => song.id === currentSong?.id);
       shuffleRef.current = { key: queue.map((song) => song.id).join('|'), remaining: shuffleBag(queue.length, index), history: currentSong ? [currentSong.id] : [] };
     } catch (requestError) {
@@ -796,13 +962,14 @@ export default function Home() {
     }
   };
 
-  const toggleFavorite = () => {
-    if (!currentSong) return;
+  const toggleSongFavorite = (song) => {
+    if (!song) return;
     const current = musicStateRef.current.favorites;
-    const next = current.includes(currentSong.id) ? current.filter((id) => id !== currentSong.id) : [...current, currentSong.id];
+    const next = current.includes(song.id) ? current.filter((id) => id !== song.id) : [...current, song.id];
     setFavorites(next);
     persistMusicState({ ...musicStateRef.current, favorites: next });
   };
+  const toggleFavorite = () => toggleSongFavorite(currentSong);
 
   const logout = async () => {
     automaticRestoreAllowedRef.current = false;
@@ -813,36 +980,40 @@ export default function Home() {
     setLoginEmail('');
     const previousApi = api;
     const previousGoogle = isGoogle;
+    const keepLocalPlayback = Boolean(currentSong?.localUri);
+    if (keepLocalPlayback && !isNative) retainOfflinePlayback();
     ++sessionGenerationRef.current;
     ++directoryRequestRef.current;
-    ++playbackRequestRef.current;
     uploadControllerRef.current?.abort();
-    playbackControllerRef.current?.abort();
-    audioRef.current?.pause();
-    if (isNative) await NativeAudio.stop().catch(() => {});
+    if (!keepLocalPlayback) {
+      ++playbackRequestRef.current;
+      playbackControllerRef.current?.abort();
+      audioRef.current?.pause();
+      if (isNative) await NativeAudio.stop().catch(() => {});
+    }
     localStorage.removeItem('yungan-session');
     setCredentials(null);
     setSongs([]);
     setFolders([]);
     setFolderPath([ROOT_FOLDER]);
     folderPathRef.current = [ROOT_FOLDER];
-    setPlaybackQueue([]);
-    setCurrentSong(null);
-    setIsPlaying(false);
+    if (!keepLocalPlayback) { setPlaybackQueue([]); setCurrentSong(null); setIsPlaying(false); }
     setDriveApi(null);
-    setAudioSrc('');
+    if (!keepLocalPlayback) setAudioSrc('');
     setUpload(null);
-    setLoadingTrack(false);
-    setTrackReady(false);
+    if (!keepLocalPlayback) { setLoadingTrack(false); setTrackReady(false); }
     setShowPlayer(false);
     setShowQueue(false);
     setActiveNav('云端曲库');
     setQuery('');
     setError('');
     setBusy(true);
-    nativeLoadedRef.current = false;
-    nativeQueueRef.current = [];
-    if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = ''; }
+    if (!keepLocalPlayback) {
+      nativeLoadedRef.current = false;
+      nativeQueueRef.current = [];
+      if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = ''; }
+    }
+    if (isNative || isDesktop) { setLibrarySource('local'); localStorage.setItem('yungan-library-source', 'local'); }
     try {
       if (previousGoogle) { await previousApi.flush().catch(() => {}); await disconnectGoogle(); }
     } catch (requestError) { setError(requestError.message); }
@@ -893,53 +1064,225 @@ export default function Home() {
     }
   };
 
-  const saveCurrentSong = async () => {
-    if (!api || !currentSong || savingSong) return;
+  const saveSong = async (song) => {
+    if ((!api && !song?.localUri) || !song || savingSong) return;
     setSavingSong(true);
     setDownloadNotice('');
     setError('');
-    const song = currentSong;
     try {
-      if (isNative) {
+      if (isNative && song.localUri) {
+        const result = await NativeDownloads.saveFile({ jobId: song.jobId, fileName: song.fileName });
+        setDownloadNotice(result.message || 'MP3 已保存到手机音乐目录');
+      } else if (isNative) {
         const result = await NativeAudio.saveDriveSong({ id: song.id, fileName: song.fileName || song.title, mimeType: song.mimeType || 'application/octet-stream' });
         setDownloadNotice(result.message);
       } else {
-        const blob = await api.downloadSong(song.id);
-        const url = URL.createObjectURL(blob);
+        let url = song.localUri;
+        let temporaryUrl = false;
+        if (!url || song.cacheId) {
+          const blob = song.cacheId ? await fetch(song.localUri).then((response) => { if (!response.ok) throw new Error('本机缓存暂时无法读取。'); return response.blob(); }) : await api.downloadSong(song.id);
+          url = URL.createObjectURL(blob);
+          temporaryUrl = true;
+        }
         const anchor = document.createElement('a');
         anchor.href = url;
         anchor.download = (song.fileName || song.title).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        if (temporaryUrl) setTimeout(() => URL.revokeObjectURL(url), 60000);
         setDownloadNotice(`已发起下载：${song.fileName || song.title}（保留原格式）`);
       }
     } catch (requestError) { setError(`保存失败：${requestError.message}`); }
     finally { setSavingSong(false); }
   };
+  const saveCurrentSong = () => saveSong(currentSong);
 
-  const openOnlinePlaylists = async (mode = 'download') => {
-    setMenuOpen(false);
-    ++playbackRequestRef.current;
-    playbackControllerRef.current?.abort();
-    audioRef.current?.pause();
-    if (isNative) {
-      try { await NativeAudio.pause(); } catch (requestError) { setError(requestError.message); return; }
+  const cacheCloudSong = async (song) => {
+    if (!window.electronAPI?.musicCache || !credentials || song.localUri || cacheBusyId) return;
+    const generation = sessionGenerationRef.current;
+    setCacheBusyId(song.id);
+    try {
+      await window.electronAPI.musicCache.cache({ fileId: song.id, accountId: credentials.accountId });
+      await reloadLocalLibrary();
+      if (generation === sessionGenerationRef.current) setSongActionNotice(`《${song.title}》已保存到本机音乐，离线也能播放。`);
+    } catch (failure) {
+      if (generation === sessionGenerationRef.current) setError(`缓存失败：${failure.message}`);
+    } finally { setCacheBusyId(''); }
+  };
+
+  const runSongMenuAction = async (action) => {
+    const context = songMenu;
+    closeSongMenu(true);
+    if (!context) return;
+    try { assertSongActionCurrent(context); await action(context.song); }
+    catch (failure) { setError(failure.message); }
+  };
+
+  const requestSongTrash = () => {
+    const context = songMenu;
+    closeSongMenu();
+    if (!context?.canTrash) return;
+    try {
+      assertSongActionCurrent(context);
+      setTrashError('');
+      setTrashConfirmation(context);
+    } catch (failure) { setError(failure.message); }
+  };
+
+  const requestCacheRemoval = () => {
+    const context = songMenu;
+    closeSongMenu();
+    if (!context?.song.cacheId) return;
+    try {
+      assertSongActionCurrent(context);
+      setTrashError('');
+      setTrashConfirmation({ ...context, mode: 'cache' });
+    } catch (failure) { setError(failure.message); }
+  };
+
+  const closeTrashConfirmation = () => {
+    if (trashingSong) return;
+    if (trashConfirmation?.anchor?.isConnected) trashConfirmation.anchor.focus();
+    setTrashConfirmation(null);
+    setTrashError('');
+  };
+
+  const confirmSongTrash = async () => {
+    const context = trashConfirmation;
+    if (!context || (!context.canTrash && context.mode !== 'cache') || trashControllerRef.current) return;
+    const controller = new AbortController();
+    trashControllerRef.current = controller;
+    setTrashingSong(true);
+    setTrashError('');
+    try {
+      assertSongActionCurrent(context);
+      if (context.mode === 'cache') {
+        ++localLibraryRevisionRef.current;
+        await window.electronAPI.musicCache.remove({ cacheId: context.song.cacheId });
+        ++localLibraryRevisionRef.current;
+        const cacheId = context.song.cacheId;
+        const snapshot = playbackStateRef.current;
+        const queue = snapshot.queue.filter((song) => song.cacheId !== cacheId);
+        const removedCurrent = snapshot.currentSong?.cacheId === cacheId || (!snapshot.currentSong?.localUri && snapshot.currentSong?.id === context.song.driveFileId && songActionAccountRef.current === context.song.originalAccount?.id);
+        setLocalSongs((items) => items.filter((song) => song.cacheId !== cacheId));
+        setPlaybackQueue(queue);
+        shuffleRef.current = { key: queue.map((song) => song.id).join('|'), remaining: shuffleBag(queue.length, Math.max(0, queue.findIndex((song) => song.id === snapshot.currentSong?.id))), history: removedCurrent ? [] : [snapshot.currentSong?.id].filter(Boolean) };
+        playbackStateRef.current = { currentSong: removedCurrent ? null : snapshot.currentSong, queue };
+        applyMusicState(removeSongFromMusicState(musicStateRef.current, `cache:${cacheId}`));
+        persistMusicState(musicStateRef.current);
+        if (removedCurrent) {
+          ++playbackRequestRef.current;
+          playbackControllerRef.current?.abort();
+          audioRef.current?.pause();
+          setCurrentSong(null); setAudioSrc(''); setIsPlaying(false); setLoadingTrack(false); setTrackReady(false);
+          setProgress(0); setDuration(0); setShowPlayer(false);
+          seekingRef.current = false; seekRequestRef.current = null; ++seekRevisionRef.current;
+        }
+        setTrashConfirmation(null);
+        if (songActionScopeMatches(context.scope, currentSongActionScope())) setSongActionNotice(`《${context.song.title}》的本机缓存已删除，云盘文件保留。`);
+        return;
+      }
+      await context.api.trashSong(context.song.id, { signal: controller.signal, assertCurrent: () => assertSongActionCurrent(context) });
+      assertSongActionCurrent(context);
+      controller.signal.throwIfAborted();
+      const id = context.song.id;
+      trashedSongIdsRef.current.add(id);
+      let nativeRemoval;
+      let nativeRemovalError;
+      if (isNative) {
+        try { nativeRemoval = await NativeAudio.removeFromQueue({ id }); }
+        catch (failure) {
+          nativeRemovalError = failure;
+          if (context.scope.generation === sessionGenerationRef.current) await NativeAudio.stop().catch(() => {});
+        }
+        assertSongActionCurrent(context);
+      }
+      // Discard a directory read started before this mutation, so it cannot bring the old row back.
+      ++directoryRequestRef.current;
+      setSongs((items) => withoutSong(items, id));
+      repairSongsRef.current = null;
+      const oldQueue = playbackStateRef.current.queue;
+      shuffleRef.current = removeSongFromShuffle(shuffleRef.current, oldQueue, id);
+      setPlaybackQueue((queue) => withoutSong(queue, id));
+      nativeQueueRef.current = withoutSong(nativeQueueRef.current, id);
+      applyMusicState(removeSongFromMusicState(musicStateRef.current, id));
+      persistMusicState(musicStateRef.current);
+      const removedCurrent = playbackStateRef.current.currentSong?.id === id || nativeRemoval?.removedCurrent;
+      playbackStateRef.current = { currentSong: removedCurrent ? null : playbackStateRef.current.currentSong, queue: withoutSong(oldQueue, id) };
+      if (removedCurrent) {
+        ++playbackRequestRef.current;
+        playbackControllerRef.current?.abort();
+        audioRef.current?.pause();
+        setCurrentSong(null);
+        setAudioSrc('');
+        setIsPlaying(false);
+        setProgress(0);
+        setDuration(0);
+        setLoadingTrack(false);
+        setTrackReady(false);
+        setShowPlayer(false);
+        nativeLoadedRef.current = false;
+        seekingRef.current = false;
+        seekRequestRef.current = null;
+        ++seekRevisionRef.current;
+        if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = ''; }
+      }
+      setTrashConfirmation(null);
+      setSongActionNotice(`《${context.song.title || '歌曲'}》已移到 Google Drive 回收站，可在 30 天内恢复。`);
+      if (context.anchor?.isConnected) context.anchor.focus();
+      if (nativeRemovalError) {
+        nativeLoadedRef.current = false;
+        setIsPlaying(false);
+        setError(`歌曲已移到云盘回收站；播放队列更新失败，请重新选择歌曲：${nativeRemovalError.message}`);
+      }
+      context.api.getAccount().then((data) => {
+        if (context.scope.generation === sessionGenerationRef.current) setStorageQuota(data.storageQuota);
+      }).catch(() => {});
+    } catch (failure) {
+      if (controller.signal.aborted || failure.code === 'SONG_ACTION_STALE') return;
+      if (context.scope.generation === sessionGenerationRef.current) setTrashError(failure.message);
+    } finally {
+      if (trashControllerRef.current === controller) trashControllerRef.current = null;
+      setTrashingSong(false);
     }
-    setAudioSrc('');
-    setIsPlaying(false);
-    setLoadingTrack(false);
-    // Android keeps its paused native queue while finding songs. Its progress
-    // control must remain ready when returning and resuming the same song.
-    if (!isNative) setTrackReady(false);
+  };
+
+  const openOnlinePlaylists = (mode = 'download') => {
+    setMenuOpen(false);
     setShowPlayer(false);
     setShowQueue(false);
     setShowSettings(false);
     setOnlineMode(mode === 'discover' ? 'discover' : 'download');
     setShowOnlinePlaylists(true);
   };
-  const openDiscovery = () => openOnlinePlaylists('discover');
+  const openDiscovery = () => { setSourceRadio(null); openOnlinePlaylists('discover'); };
+  const openSongRadio = () => {
+    const videoId = youtubeVideoId(currentSong?.sourceUrl || currentSong?.url);
+    if (videoId) setSourceRadio({ ...currentSong, videoId, nonce: Date.now() });
+    else setSourceRadio(null);
+    openOnlinePlaylists('discover');
+  };
+
+  const playDownloaded = async (file, job) => {
+    try {
+      if (!isNative) {
+        if (!file.localUri) throw new Error('音频文件尚未准备好，请重试。');
+        const song = nativeDownloadSong(file, job, file.localUri);
+        setLocalSongs((items) => [song, ...items.filter((item) => item.id !== song.id)]);
+        setLibrarySource('local');
+        await startSong(song, [song, ...localSongs.filter((item) => item.id !== song.id)]);
+      } else {
+        const uri = file.localUri || (await NativeDownloads.getFile({ jobId: job.id, fileName: file.name })).uri;
+        const song = nativeDownloadSong(file, job, uri);
+        if (song.coverUri) song.coverUrl = Capacitor.convertFileSrc(song.coverUri);
+        await reloadLocalLibrary();
+        setLibrarySource('local'); localStorage.setItem('yungan-library-source', 'local');
+        await startSong(song, [song, ...localSongs.filter((item) => item.id !== song.id)]);
+      }
+      setShowOnlinePlaylists(false); setShowSettings(false); setShowPlayer(true);
+    } catch (failure) { setError(failure.message); throw failure; }
+  };
 
   const uploadDownloadedMp3 = api && credentials ? async (file, metadata) => {
     const generation = sessionGenerationRef.current;
@@ -961,25 +1304,29 @@ export default function Home() {
     Object.assign(original, song);
     if (generation === sessionGenerationRef.current) {
       setSongs((items) => items.map((item) => item.id === song.id ? song : item));
-      setCurrentSong((item) => item?.id === song.id ? song : item);
-      setPlaybackQueue((items) => items.map((item) => item.id === song.id ? song : item));
-      nativeQueueRef.current = nativeQueueRef.current.map((item) => item.id === song.id ? song : item);
+      const repairedSong = (item) => {
+        if (item?.id !== song.id) return item;
+        if (item.localUri) return item.originalAccount?.id === credentials.accountId ? withCachedSong(song, item) : item;
+        return song;
+      };
+      setCurrentSong(repairedSong);
+      setPlaybackQueue((items) => items.map(repairedSong));
+      nativeQueueRef.current = nativeQueueRef.current.map(repairedSong);
     }
     return song;
   } : null;
   const openSettings = () => { setMenuOpen(false); setShowPlayer(false); setShowQueue(false); setShowSettings(true); };
-  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={openOnlinePlaylists} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials || showOnlinePlaylists || showSettings} />;
-  const settingsPage = <AppSettings user={credentials} onLogin={() => { setShowSettings(false); setShowOnlinePlaylists(false); beginGoogleLogin(); }} onBack={() => setShowSettings(false)} onOpenPlaylists={openOnlinePlaylists} busy={busy} />;
-  if (showOnlinePlaylists) return <>{navigation}{showSettings && settingsPage}<div hidden={showSettings}><OnlinePlaylists initialMode={onlineMode} taste={{ songs, favorites, recent, currentSong, currentQueue: playbackQueue }} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={() => { setShowOnlinePlaylists(false); beginGoogleLogin(); }} /></div></>;
-  if (!credentials) return <>{navigation}{showSettings ? settingsPage : <Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} />}</>;
+  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={() => openOnlinePlaylists()} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials && !isNative} />;
+  const settingsPage = <AppSettings user={credentials} onLogin={beginGoogleLogin} onLogout={logout} onBack={() => { setShowSettings(false); setShowOnlinePlaylists(false); }} syncStatus={syncStatus} storageQuota={storageQuota} busy={busy} />;
+  const changeLibrarySource = (source) => { songActionSourceRef.current = source; setLibrarySource(source); setQuery(''); setActiveNav('云端曲库'); localStorage.setItem('yungan-library-source', source); };
 
   const navItems = [
     ['云端曲库', 'folder'], ['我的收藏', 'heart'], ['最近播放', 'history'],
   ];
 
   return (
-    <>{navigation}{showSettings && settingsPage}<div className="music-app" style={showSettings ? { display: 'none' } : undefined}>
-      <aside className="sidebar">
+    <>{navigation}<div className={`music-app${currentSong ? ' has-player' : ''}${!credentials && !isNative && !isDesktop ? ' without-sidebar' : ''}`}>
+      <aside className="sidebar" hidden={!credentials && !isNative && !isDesktop}>
         <div className="brand"><span><Icon name="logo" size={25} /></span><strong>云感音乐</strong></div>
         <nav>
           <p>在线音乐</p>
@@ -988,6 +1335,7 @@ export default function Home() {
               key={label}
               className={activeNav === label ? 'active' : ''}
               onClick={() => {
+                setShowOnlinePlaylists(false); setShowSettings(false);
                 setActiveNav(label);
                 contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
               }}
@@ -998,41 +1346,42 @@ export default function Home() {
           <button onClick={openDiscovery}><Icon name="search" size={19} /><span>发现音乐</span></button>
           <p>Google Drive</p>
           <button onClick={openOnlinePlaylists}><Icon name="radio" size={19} /><span>歌单下载</span></button>
-          <button disabled={busy || Boolean(upload)} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={19} /><span>我的云盘</span></button>
-          <button disabled={busy || Boolean(upload)} onClick={openUploads}><Icon name="upload" size={19} /><span>上传目录</span></button>
+          <button disabled={!credentials || busy || Boolean(upload)} onClick={() => { setShowOnlinePlaylists(false); setShowSettings(false); setLibrarySource('cloud'); openDirectory([ROOT_FOLDER]); }}><Icon name="home" size={19} /><span>我的云盘</span></button>
+          <button disabled={!credentials || busy || Boolean(upload)} onClick={() => { setShowOnlinePlaylists(false); setShowSettings(false); setLibrarySource('cloud'); openUploads(); }}><Icon name="upload" size={19} /><span>上传目录</span></button>
           <p>应用</p>
           <button onClick={openSettings}><Icon name="settings" size={19} /><span>设置</span>{hasUpdate && <small className="sidebar-update-dot">有更新</small>}</button>
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
-          <div><b>Google 账号已验证</b><small>{credentials.email}</small></div>
+          <div><b>{credentials ? 'Google 账号已连接' : '本机音乐'}</b><small>{credentials?.email || '下载后即可播放'}</small></div>
         </div>
       </aside>
 
-      <section className="main-view">
+      <section className="main-view" hidden={showOnlinePlaylists || showSettings || (!credentials && !isNative && !isLocalLibrary)}>
         <header className="topbar">
-          <div className="nav-arrows"><button aria-label="返回上级目录" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory(folderPath.slice(0, -1))}>‹</button><button aria-label="返回我的云盘" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={16} /></button></div>
-          <label className="search-box"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前目录的音乐" /></label>
+          <div className="nav-arrows" hidden={isLocalLibrary || !credentials}><button aria-label="返回上级目录" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory(folderPath.slice(0, -1))}>‹</button><button aria-label="返回我的云盘" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={16} /></button></div>
+          <label className="search-box"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isLocalLibrary ? '搜索本机音乐' : '搜索当前目录的音乐'} /></label>
           <div className="top-actions">
             {isGoogle && <button title="上传音乐到 Google Drive" aria-label="上传音乐" disabled={Boolean(upload) || busy} onClick={() => uploadInputRef.current?.click()}><Icon name="upload" /></button>}
             <button title="刷新曲库" aria-label="刷新曲库" disabled={busy || Boolean(upload)} onClick={() => loadLibrary()}><Icon name="refresh" /></button>
             <span className="avatar">{accountName.slice(0, 1).toUpperCase()}</span>
             <span className="username">{accountName}</span>
-            <button title="退出登录" aria-label="退出登录" disabled={busy} onClick={logout}><Icon name="logout" /></button>
+            {credentials && <button title="退出登录" aria-label="退出登录" disabled={busy} onClick={logout}><Icon name="logout" /></button>}
           </div>
         </header>
 
         <div className="content-scroll" ref={contentRef}>
+          {(isNative || isDesktop || localSongs.length > 0) && <div className="library-source-tabs" role="group" aria-label="音乐来源"><button className={isLocalLibrary ? 'selected' : ''} aria-pressed={isLocalLibrary} onClick={() => changeLibrarySource('local')}>本机音乐 <small>{localSongs.length}</small></button><button className={!isLocalLibrary ? 'selected' : ''} aria-pressed={!isLocalLibrary} onClick={() => changeLibrarySource('cloud')}>Google 云盘</button></div>}
           <section className="playlist-hero">
             <div className="hero-cover">
               <Icon name="logo" size={52} />
             </div>
             <div className="hero-info">
-              <span className="playlist-tag">音乐目录</span>
-              <h1>{activeNav === '云端曲库' ? folderPath.at(-1).name : activeNav}</h1>
-              <p><span className="tiny-avatar">{accountName[0].toUpperCase()}</span>{accountName} · Google Drive</p>
+              <span className="playlist-tag">{isLocalLibrary ? '离线曲库' : '音乐目录'}</span>
+              <h1>{activeNav === '云端曲库' ? libraryTitle : activeNav}</h1>
+              <p>{isLocalLibrary ? '已下载音乐 · 随时播放' : <><span className="tiny-avatar">{accountName[0].toUpperCase()}</span>{credentials ? `${accountName} · Google Drive` : '连接 Google 后同步音乐'}</>}</p>
               <div className="hero-actions">
-                <button className="red-button" disabled={!visibleSongs.length || busy || loadingTrack} onClick={() => startSong(visibleSongs[0], visibleSongs)}><Icon name="play" size={17} />播放全部</button>
+                <button className="red-button" disabled={!visibleSongs.length || (!isLocalLibrary && busy) || loadingTrack} onClick={() => startSong(visibleSongs[0], visibleSongs)}><Icon name="play" size={17} />播放全部</button>
                 <button className="outline-button" disabled={!currentSong || savingSong} onClick={saveCurrentSong}>{savingSong ? '正在保存…' : '保存当前歌曲原文件'}</button>
                 {isGoogle && <button className="outline-button upload-button" disabled={Boolean(upload) || busy} onClick={() => uploadInputRef.current?.click()}><Icon name="upload" size={17} />上传音乐</button>}
                 <button className="outline-button" disabled={busy || Boolean(upload)} onClick={() => loadLibrary()}><Icon name="refresh" size={17} />刷新曲库</button>
@@ -1040,8 +1389,10 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="directory-panel" aria-label="Google Drive 音乐目录">
-            {downloadNotice && <p className="setup-message" role="status">{downloadNotice}</p>}
+          {downloadNotice && <p className="setup-message" role="status">{downloadNotice}</p>}
+          {songActionNotice && <p className="setup-message" role="status">{songActionNotice}</p>}
+          {isDesktop && <p className="directory-hint">{isLocalLibrary ? '歌曲和封面保存在这台电脑，离线也能播放。' : '播放歌曲会自动保存本机副本，也可右键选择“保存到本机曲库”。'}{cacheBusyId && ' 正在缓存歌曲…'}</p>}
+          {!isLocalLibrary && credentials && <section className="directory-panel" aria-label="Google Drive 音乐目录">
             <header><div><Icon name="folder" size={21} /><h2>我的音乐目录</h2><small>{folders.length} 个文件夹 · {songs.length} 首音乐</small></div><button disabled={busy || Boolean(upload)} onClick={() => openDirectory([ROOT_FOLDER])}>我的云盘</button><button disabled={busy || Boolean(upload)} onClick={openUploads}>上传目录</button></header>
             <nav className="directory-breadcrumbs" aria-label="当前目录路径">
               {folderPath.map((folder, index) => <span key={`${folder.id}:${index}`}><button aria-current={index === folderPath.length - 1 ? 'page' : undefined} disabled={busy || Boolean(upload) || index === folderPath.length - 1} title={folder.name} onClick={() => openDirectory(folderPath.slice(0, index + 1))}>{folder.name}</button>{index < folderPath.length - 1 && <i>›</i>}</span>)}
@@ -1049,22 +1400,22 @@ export default function Home() {
             {busy && <p className="directory-loading" role="status">正在读取音乐目录…</p>}
             {!busy && Boolean(folders.length) && <div className="folder-grid">{folders.map((folder) => <button className="drive-folder" key={folder.id} title={`打开 ${folder.name}`} disabled={Boolean(upload)} onClick={() => openDirectory([...folderPath, folder])}><Icon name="folder" size={26} /><span>{folder.name}</span><b>›</b></button>)}</div>}
             {!busy && !folders.length && <p className="directory-hint">当前目录没有子文件夹。下方显示此目录中的音乐。</p>}
-          </section>
+          </section>}
 
-          {isGoogle && <section className="drive-status" aria-live="polite">
+          {isGoogle && !isLocalLibrary && <section className="drive-status" aria-live="polite">
             <div><GoogleLogo /><span>{storageQuota ? `Google 空间已用 ${formatStorage(storageQuota.usage)}${storageQuota.limit ? ` / ${formatStorage(storageQuota.limit)}` : ''}` : '音乐保存在你的 Google Drive'}</span></div>
             <div><span>{syncStatus}</span>{(syncStatus.includes('失败') || syncStatus.includes('待同步')) && <button onClick={() => persistMusicState()}>重试同步</button>}<button disabled={busy || Boolean(upload)} onClick={() => googleLogin({ account: credentials.email })}>重新连接</button></div>
           </section>}
           {upload && <section className="upload-progress" aria-live="polite"><div><span>正在上传 {upload.index} / {upload.total} · {upload.name}</span><button onClick={() => uploadControllerRef.current?.abort()}>取消上传</button></div><progress value={upload.percent} max="100" /><small>{upload.percent}%</small></section>}
 
           <section className="track-section">
-            <div className="tabs"><span className="selected">歌曲 <sup>{visibleSongs.length}</sup></span><small>当前目录{activeNav !== '云端曲库' ? ` · ${activeNav}` : ''}</small></div>
+            <div className="library-filter-tabs" role="group" aria-label="筛选曲库">{[['云端曲库', '全部'], ['我的收藏', '喜欢'], ['最近播放', '最近']].map(([id, label]) => <button key={id} className={activeNav === id ? 'selected' : ''} aria-pressed={activeNav === id} onClick={() => setActiveNav(id)}>{label}</button>)}<small>{visibleSongs.length} 首</small></div>
             {error && <div className="inline-error" role="alert">{error}</div>}
             {loadingTrack && <div className="buffering" aria-live="polite">正在读取音频…</div>}
             <div className="track-head"><span>#</span><span>标题</span><span>专辑</span><span>时长</span></div>
             <div className="track-list">
-              {busy && !songs.length ? <div className="empty">正在读取云端曲库…</div> : visibleSongs.map((song, index) => (
-                <button key={song.id} disabled={busy} className={`track-row ${currentSong?.id === song.id ? 'playing' : ''}`} onClick={() => playSong(song)}>
+              {!isLocalLibrary && busy && !songs.length ? <div className="empty">正在读取云端曲库…</div> : visibleSongs.map((song, index) => (
+                <button key={song.id} disabled={!isLocalLibrary && busy} className={`track-row ${currentSong?.id === song.id ? 'playing' : ''}`} onClick={() => playSong(song)} onContextMenu={(event) => openSongMenu(event, song)} onKeyDown={(event) => songMenuKeyDown(event, song)} aria-haspopup="menu">
                   <span className="track-index">{currentSong?.id === song.id && isPlaying ? <i className="equalizer"><b /><b /><b /></i> : String(index + 1).padStart(2, '0')}</span>
                   <span className="track-title">
                     <span className="art"><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></span>
@@ -1074,14 +1425,18 @@ export default function Home() {
                   <span className="track-duration">{formatTime(song.duration)}</span>
                 </button>
               ))}
-              {!busy && !visibleSongs.length && <div className="empty">{query ? '没有找到匹配的歌曲' : activeNav === '我的收藏' ? '收藏此目录中的歌曲，它们会出现在这里' : activeNav === '最近播放' ? '此目录中听过的歌曲会出现在这里' : folders.length ? '打开上面的文件夹，找到你的音乐' : '这个目录还没有音乐，可返回上级目录继续查找，或上传音乐'}{activeNav === '云端曲库' && !query && !folders.length && <button className="red-button empty-upload" disabled={Boolean(upload)} onClick={() => uploadInputRef.current?.click()}>上传到 Yungan Music</button>}</div>}
+              {(isLocalLibrary || !busy) && !visibleSongs.length && <div className="empty">{query ? '没有找到匹配的歌曲' : activeNav === '我的收藏' ? '收藏喜欢的歌曲，它们会出现在这里' : activeNav === '最近播放' ? '听过的歌曲会出现在这里' : isLocalLibrary ? '还没有下载音乐，去发现一首喜欢的歌吧' : !credentials ? '连接 Google，打开你的云端音乐' : folders.length ? '打开上面的文件夹，找到你的音乐' : '这个目录还没有音乐'}{activeNav === '云端曲库' && !query && (isLocalLibrary ? <button className="red-button empty-upload" onClick={openDiscovery}>发现音乐</button> : !credentials ? <button className="red-button empty-upload" onClick={beginGoogleLogin} disabled={busy}>连接 Google</button> : !folders.length && <button className="red-button empty-upload" disabled={Boolean(upload)} onClick={() => uploadInputRef.current?.click()}>上传音乐</button>)}</div>}
             </div>
           </section>
         </div>
       </section>
 
-      <footer className="player">
-        <button className="player-song" onClick={() => setShowPlayer(true)}>
+      <div className="workspace-page" hidden={!showOnlinePlaylists || showSettings}>{error && <div className="inline-error" role="alert">{error}<button aria-label="关闭提示" onClick={() => setError('')}>×</button></div>}<OnlinePlaylists mode={onlineMode} onModeChange={setOnlineMode} active={showOnlinePlaylists && !showSettings} taste={{ songs: [...songs, ...localSongs], favorites, recent, currentSong, currentQueue: playbackQueue }} sourceRadio={sourceRadio} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={beginGoogleLogin} onPlayDownloaded={playDownloaded} /></div>
+      <div className="workspace-page" hidden={!showSettings}>{error && <div className="inline-error" role="alert">{error}</div>}{settingsPage}</div>
+      <div className="workspace-page workspace-login" hidden={Boolean(credentials) || isNative || isLocalLibrary || showOnlinePlaylists || showSettings}><Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} /></div>
+
+      <footer className={`player${currentSong ? '' : ' player--empty'}`}>
+        <button className="player-song" disabled={!currentSong} onClick={() => setShowPlayer(true)}>
           <span className="player-art"><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" />} /></span>
           <span><b>{currentSong?.title || '未播放'}</b><small>{currentSong?.artist || '从曲库选择歌曲'}</small></span>
           <span onClick={(event) => { event.stopPropagation(); toggleFavorite(); }} className={favorites.includes(currentSong?.id) ? 'is-favorite' : ''}><Icon name="heart" size={19} /></span>
@@ -1112,7 +1467,7 @@ export default function Home() {
           <div className={`vinyl ${isPlaying ? 'spinning' : ''}`}>
             <div><SongArtwork song={currentSong} api={api} fallback={<Icon name="logo" size={52} />} /></div>
           </div>
-          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p><button className="song-radio-entry" onClick={openDiscovery} disabled={!currentSong}><Icon name="radio" size={18} />从这首歌开启电台</button></div>
+          <div className="full-meta"><h2>{currentSong?.title || '未播放'}</h2><p>{currentSong?.artist || '未知歌手'} · {currentSong?.album || '未知专辑'}</p><button className="song-radio-entry" onClick={openSongRadio} disabled={!youtubeVideoId(currentSong?.sourceUrl || currentSong?.url)}><Icon name="radio" size={18} />从这首歌开启电台</button></div>
           <button className={`full-heart ${favorites.includes(currentSong?.id) ? 'is-favorite' : ''}`} onClick={toggleFavorite} aria-label={favorites.includes(currentSong?.id) ? '取消收藏' : '收藏歌曲'}><Icon name="heart" size={25} /></button>
           <div className="full-progress"><SeekBar value={progress} duration={effectiveDuration} disabled={loadingTrack || !trackReady} onSeek={seekTo} onPreview={setProgress} onSeekStart={beginSeek} onSeekCancel={cancelSeek} /><div><span>{formatTime(progress)}</span><span>{formatTime(effectiveDuration)}</span></div></div>
           <div className="full-controls">
@@ -1128,11 +1483,13 @@ export default function Home() {
       {showQueue && (
         <div className="queue-backdrop" onClick={() => setShowQueue(false)}>
           <section className="queue-sheet" onClick={(event) => event.stopPropagation()}>
-            <header><div><h3>播放队列</h3><p>{playbackQueue.length} 首歌曲</p></div><button onClick={() => setShowQueue(false)}><Icon name="close" /></button></header>
-            <div>{playbackQueue.map((song, index) => <button key={song.id} className={currentSong?.id === song.id ? 'current' : ''} onClick={() => currentSong?.id === song.id ? togglePlay() : startSong(song, playbackQueue)}><span>{String(index + 1).padStart(2, '0')}</span><span><b>{song.title}</b><small>{song.artist || '未知歌手'}</small></span><em>{formatTime(song.duration)}</em></button>)}{!playbackQueue.length && <p className="empty">选择一首音乐开始播放</p>}</div>
+            <header><div><h3>播放队列</h3><p>{playbackQueue.length} 首歌曲</p></div><button onClick={() => setShowQueue(false)} aria-label="关闭播放队列"><Icon name="close" /></button></header>
+            <div>{playbackQueue.map((song, index) => <button key={song.id} className={currentSong?.id === song.id ? 'current' : ''} onClick={() => currentSong?.id === song.id ? togglePlay() : startSong(song, playbackQueue)} onContextMenu={(event) => openSongMenu(event, song)} onKeyDown={(event) => songMenuKeyDown(event, song)} aria-haspopup="menu"><span>{String(index + 1).padStart(2, '0')}</span><span><b>{song.title}</b><small>{song.artist || '未知歌手'}</small></span><em>{formatTime(song.duration)}</em></button>)}{!playbackQueue.length && <p className="empty">选择一首音乐开始播放</p>}</div>
           </section>
         </div>
       )}
+      {songMenu && <SongContextMenu context={songMenu} favorite={favorites.includes(songMenu.song.id)} canTrash={songMenu.canTrash} onClose={closeSongMenu} onPlay={() => runSongMenuAction((song) => startSong(song, visibleSongs))} onFavorite={() => runSongMenuAction(toggleSongFavorite)} onSave={() => runSongMenuAction(saveSong)} onTrash={requestSongTrash} onCacheSong={isDesktop && credentials ? () => runSongMenuAction(cacheCloudSong) : undefined} onRemoveCacheSong={isDesktop ? requestCacheRemoval : undefined} />}
+      {trashConfirmation && <ConfirmSongTrash mode={trashConfirmation.mode} song={trashConfirmation.song} email={trashConfirmation.email} busy={trashingSong} error={trashError} onClose={closeTrashConfirmation} onConfirm={confirmSongTrash} />}
       {isGoogle && <input ref={uploadInputRef} className="hidden-file-input" type="file" multiple accept={MUSIC_ACCEPT} aria-label="选择要上传的音乐文件" onChange={(event) => { uploadMusic(event.target.files); event.target.value = ''; }} />}
     </div></>
   );
