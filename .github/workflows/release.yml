@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           $originalTemp = node -p "require('os').tmpdir()"
-          $canonicalTemp = node -p "require('fs').realpathSync(require('os').tmpdir())"
+          $canonicalTemp = node -p "require('fs').realpathSync.native(require('os').tmpdir())"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the runner temporary directory' }
           $env:TEMP = $canonicalTemp
           $env:TMP = $canonicalTemp
