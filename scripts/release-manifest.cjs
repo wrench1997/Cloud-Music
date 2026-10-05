@@ -31,10 +31,11 @@ if (require.main === module) {
   const manifest = prepareRelease({ directory: path.resolve(process.argv[2] || path.join(root, '.local/release-assets')), apkPath: path.resolve(process.argv[3] || path.join(root, 'android/app/build/outputs/apk/release/app-release.apk')), gradlePath: path.join(root, 'android/app/build.gradle'), windowsDirectory: path.join(root, 'dist') });
   const sourcePackage = JSON.parse(execFileSync('git', ['show', 'HEAD:package.json'], { cwd: root, encoding: 'utf8' }));
   if (sourcePackage.version !== require('../package.json').version) throw new Error('Commit the matching application version before preparing release source.');
-  execFileSync('git', ['diff', '--exit-code', 'HEAD', '--', 'src', 'android', 'scripts', 'package.json', 'package-lock.json', 'ANDROID-LICENSE.md', 'THIRD_PARTY_NOTICES.md'], { cwd: root, stdio: 'pipe' });
+  execFileSync('git', ['diff', '--exit-code', 'HEAD', '--', 'src', 'electron', 'android', 'scripts', 'package.json', 'package-lock.json', 'ANDROID-LICENSE.md', 'THIRD_PARTY_NOTICES.md'], { cwd: root, stdio: 'pipe' });
   const directory = path.resolve(process.argv[2] || path.join(root, '.local/release-assets'));
   const sourceName = `Cloud-Music-Source-${sourcePackage.version}.zip`;
-  execFileSync('git', ['archive', '--format=zip', `--prefix=Cloud-Music-${sourcePackage.version}/`, `--output=${path.join(directory, sourceName)}`, 'HEAD'], { cwd: root, stdio: 'pipe' });
+  // A Windows checkout may enable autocrlf; export the committed source bytes consistently on every host.
+  execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'archive', '--format=zip', `--prefix=Cloud-Music-${sourcePackage.version}/`, `--output=${path.join(directory, sourceName)}`, 'HEAD'], { cwd: root, stdio: 'pipe' });
   const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   fs.writeFileSync(path.join(directory, 'SOURCE.txt'), `Application source: ${sourceName}\nGit revision: ${revision}\nRepository: https://github.com/wrench1997/Cloud-Music/tree/${revision}\nAndroid license: ANDROID-LICENSE.md\nThird-party sources: THIRD_PARTY_NOTICES.md\n`);
   const sums = fs.readdirSync(directory).filter((name) => name !== 'SHA256SUMS.txt' && fs.statSync(path.join(directory, name)).isFile()).sort().map((name) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')}  ${name}`);
