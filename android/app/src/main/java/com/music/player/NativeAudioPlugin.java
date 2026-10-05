@@ -148,6 +148,17 @@ public class NativeAudioPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void removeFromQueue(PluginCall call) {
+        String id = call.getString("id", "");
+        if (id.isEmpty()) { call.reject("id is required"); return; }
+        getActivity().runOnUiThread(() -> {
+            MusicService service = MusicService.getInstance();
+            boolean removedCurrent = service != null && service.removeFromQueue(id);
+            call.resolve(new JSObject().put("removedCurrent", removedCurrent));
+        });
+    }
+
+    @PluginMethod
     public void seekTo(PluginCall call) {
         command(MusicService.ACTION_SEEK, call);
     }
@@ -200,6 +211,7 @@ public class NativeAudioPlugin extends Plugin {
             result.put("duration", state.getLong("duration"));
             result.put("bufferedPosition", state.getLong("bufferedPosition"));
             result.put("index", state.getInt("index"));
+            result.put("trackId", state.getString("trackId", ""));
             result.put("repeatMode", state.getInt("repeatMode"));
             result.put("shuffleEnabled", state.getBoolean("shuffleEnabled"));
             result.put("error", state.getString("error"));

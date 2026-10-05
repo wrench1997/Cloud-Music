@@ -195,23 +195,6 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
         }
         return new JSONObject(result.toString());
     }
-    private JSONObject metadata(JSONObject source, JSONObject info, String url) throws Exception {
-        boolean spotify = "spotify".equals(source.optString("metadataProvider"));
-        JSONObject result = new JSONObject(source.toString());
-        String title = source.optString("title", "");
-        String musicTitle = NativeDownloadPolicy.text(info.opt("track"), 300);
-        String variants = "\\b(?:slowed|slow|sped|remix|live|acoustic|instrumental|nightcore|super|ultra)\\b";
-        if (!spotify && !musicTitle.isEmpty() && !Pattern.compile(variants, Pattern.CASE_INSENSITIVE).matcher(title).find()) title = musicTitle;
-        if (title.isEmpty()) title = NativeDownloadPolicy.text(info.opt("title"), 300);
-        String artist = NativeDownloadPolicy.artist(info.has("artist") ? info.opt("artist") : info.opt("artists"));
-        if (spotify && !source.optString("artist").isEmpty()) artist = source.optString("artist");
-        if (artist.isEmpty()) artist = source.optString("artist", NativeDownloadPolicy.text(info.opt("uploader"), 300));
-        String cover = source.optString("coverUrl", "");
-        if (cover.isEmpty()) cover = NativeDownloadPolicy.cover(info.opt("thumbnail"));
-        if (cover.isEmpty()) cover = "https://i.ytimg.com/vi/" + NativeDownloadPolicy.videoId(url) + "/hqdefault.jpg";
-        return result.put("title", title.isEmpty() ? "歌曲" : title).put("artist", artist).put("album", source.optString("album").isEmpty() ? info.optString("album", "") : source.optString("album"))
-            .put("duration", info.optDouble("duration", source.optDouble("duration", 0))).put("sourceUrl", url).put("coverUrl", cover);
-    }
     private JSONObject enrichSpotify(JSONObject source) {
         if (!"spotify".equals(source.optString("metadataProvider")) || !source.optString("spotifyId").matches("[A-Za-z0-9]{22}")) return source;
         try {
@@ -265,7 +248,7 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
         execute(request, processId, 20 * 60 * 1000L, progress);
         if (cancelled.get()) throw new IOException("下载已取消。");
         File infoFile = new File(directory, "source-" + id + ".info.json");
-        JSONObject info = NativeDownloadStore.read(infoFile), metadata = metadata(enrichSpotify(source), info, source.getString("url"));
+        JSONObject info = NativeDownloadStore.read(infoFile), metadata = NativeDownloadPolicy.downloadMetadata(enrichSpotify(source), info, source.getString("url"));
         File[] media = directory.listFiles(file -> file.isFile() && file.getName().startsWith("source-" + id + ".") && !file.getName().endsWith(".info.json") && !file.getName().endsWith(".part") && !file.getName().endsWith(".ytdl"));
         if (media == null || media.length != 1 || media[0].length() == 0) throw new IOException("音源未生成音频文件；直播、超过一小时或超过 150 MB 的音源请换一个版本。");
         File artwork = null; JSONArray warnings = new JSONArray();

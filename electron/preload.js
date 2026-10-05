@@ -10,6 +10,16 @@ const google = Object.fromEntries(['status', 'importConfig', 'configure', 'openS
   return result.data;
 }]));
 
+const musicCache = Object.fromEntries(['list', 'cache', 'remove'].map((method) => [method, async (args) => {
+  const result = await ipcRenderer.invoke(`music-cache-${method}`, args);
+  if (!result.ok) {
+    const error = new Error(result.error.message);
+    error.code = result.error.code;
+    throw error;
+  }
+  return result.data;
+}]));
+
 contextBridge.exposeInMainWorld('electronAPI', {
   updates: {
     status: () => ipcRenderer.invoke('app-update-status'),
@@ -23,6 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   downloads: { connect: (options) => ipcRenderer.invoke('downloads-connect', options) },
   google,
+  musicCache,
   updatePlayerState: (state) => ipcRenderer.send('player-state', state),
   onPlayerCommand: (callback) => {
     const listener = (_event, command) => callback(command);

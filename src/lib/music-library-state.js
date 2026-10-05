@@ -1,4 +1,4 @@
-const localId = (id) => typeof id === 'string' && id.startsWith('native:');
+const localId = (id) => typeof id === 'string' && /^(native|cache):/.test(id);
 
 function cloudMusicState(state) {
   return { ...state, favorites: (state.favorites || []).filter((id) => !localId(id)), recent: (state.recent || []).filter((id) => !localId(id)) };

@@ -54,6 +54,16 @@ test('metadata retains playlist names, sanitizes filenames, and records the actu
   for (const url of ['http://i.scdn.co/image/x', 'https://localhost/secret', 'https://i.scdn.co.evil.test/x', 'https://user:pass@i.scdn.co/image/x', 'file:///secret']) assert.equal(safeCoverUrl(url), '');
 });
 
+test('replacement keeps original song labels but measures duration from the selected audio source', () => {
+  const source = { url: 'https://www.youtube.com/watch?v=new00000000', title: 'Original song', artist: 'Original artist', album: 'Original album', coverUrl: 'https://i.ytimg.com/vi/yTLuE57Gvsc/hqdefault.jpg', duration: 151, metadataProvider: 'youtube', preserveMetadata: true };
+  for (const duration of [150, 999]) {
+    const metadata = metadataFor(source, { track: 'Other title', artist: 'Other artist', album: 'Other album', duration });
+    assert.equal(metadata.duration, duration); assert.equal(metadata.title, source.title); assert.equal(metadata.artist, source.artist); assert.equal(metadata.album, source.album); assert.equal(metadata.coverUrl, source.coverUrl); assert.equal(metadata.sourceUrl, source.url);
+  }
+  for (const duration of [undefined, null, 0, -1, NaN, Infinity]) assert.equal(metadataFor(source, { duration }).duration, 151);
+  assert.equal(metadataFor({ ...source, duration: 0 }, {}).duration, 0);
+});
+
 test('old-title matching preserves alternate versions and avoids ambiguous songs', () => {
   const entries = [{ title: 'TiK ToK', artist: 'Kesha' }, { title: 'MONTAGEM GLORIA', artist: 'Artist' }, { title: 'MONTAGEM GLORIA - Slowed', artist: 'Artist' }, { title: 'Havana (feat. Young Thug)', artist: 'Camila Cabello' }, { title: 'luther (with SZA)', artist: 'Kendrick Lamar, SZA' }];
   assert.equal(matchPlaylistTrack('Kesha - TiK ToK (Lyrics)', entries), entries[0]);
@@ -317,4 +327,147 @@ test('a successful tool exit without a nonempty MP3 remains a failed, retryable 
     assert.equal(result.files.length, 0); assert.equal(result.failures.length, 1);
     assert.equal(fs.existsSync(path.join(root, 'downloads', job.id, 'empty-o7hCv63iWoo.mp3')), false);
   } finally { service.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('replacing one age-restricted source resumes only the missing track and preserves the other eleven MP3s', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-source-replacement-'));
+  for (const name of ['yt-dlp.exe', 'yt-dlp', 'ffmpeg.exe', 'ffmpeg']) fs.writeFileSync(path.join(root, name), '');
+  const id = '11111111-1111-4111-8111-111111111111', directory = path.join(root, 'downloads', id);
+  fs.mkdirSync(directory, { recursive: true });
+  const files = [], sources = [];
+  for (let index = 0; index < 11; index++) {
+    const video = `done${String(index).padStart(7, '0')}`, sourceUrl = `https://www.youtube.com/watch?v=${video}`;
+    const name = `Finished-${video}.mp3`, content = `completed-${index}`;
+    fs.writeFileSync(path.join(directory, name), content);
+    sources.push({ url: sourceUrl, title: `Finished ${index}`, artist: 'Original artist' });
+    files.push({ name, size: content.length, metadata: { title: `Finished ${index}`, artist: 'Original artist', sourceUrl } });
+  }
+  const failedSource = { url: 'https://www.youtube.com/watch?v=yTLuE57Gvsc', title: 'Original song', artist: 'Original artist', album: 'Original album', duration: 151, coverUrl: 'https://i.ytimg.com/vi/yTLuE57Gvsc/hqdefault.jpg', metadataProvider: 'youtube' };
+  sources.push(failedSource);
+  const saved = { id, state: 'partial', total: 12, completed: 11, sources, files, failures: [{ ...failedSource, error: 'Sign in to confirm your age' }] };
+  fs.writeFileSync(path.join(directory, '.job.json'), JSON.stringify(saved));
+  const attempts = [];
+  const spawnProcess = (_exe, args) => {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => child.emit('close', 1);
+    const video = new URL(args.at(-1)).searchParams.get('v'); attempts.push(video);
+    setImmediate(() => {
+      fs.writeFileSync(path.join(directory, `Different source title-${video}.mp3`), 'replacement audio fixture');
+      fs.writeFileSync(path.join(directory, `Different source title-${video}.info.json`), JSON.stringify({ id: video, track: 'Different source title', artist: 'Different source channel', album: 'Different album', duration: 150 }));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const service = createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), spawnProcess, metadataProcess: copyMetadataFixture, fetchImpl: noCoverFetch });
+  try {
+    const config = await service.connect(), headers = { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' };
+    const retry = (input) => fetch(`${config.url}/jobs/${id}/retry`, { method: 'POST', headers, body: JSON.stringify(input) });
+    const denied = await retry({}); assert.equal(denied.status, 400); assert.match((await denied.json()).error, /年龄验证/); assert.deepEqual(attempts, []);
+    const replacement = { fromUrl: failedSource.url, url: 'https://www.youtube.com/watch?v=new00000000' };
+    for (const input of [
+      { replacements: [{ ...replacement, fromUrl: sources[0].url }] },
+      { replacements: [{ ...replacement, fromUrl: 'https://www.youtube.com/watch?v=unknown0000' }] },
+      { replacements: [{ ...replacement, url: sources[0].url }] },
+      { replacements: [{ ...replacement, url: 'https://evil.example/watch?v=new00000000' }] },
+      { replacements: [replacement, replacement] },
+      { replacements: [replacement], cloud: { accountId: 'forged-account' } },
+    ]) {
+      const response = await retry(input); assert.equal(response.status, 400); assert.deepEqual(attempts, []);
+      const unchanged = await settledJob(config, id); assert.equal(unchanged.completed, 11); assert.equal(unchanged.failures[0].url, failedSource.url);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(directory, '.job.json'), 'utf8')).sources.at(-1).url, failedSource.url);
+    }
+    const started = await retry({ replacements: [replacement] }); assert.equal(started.status, 200);
+    const complete = await settledJob(config, id);
+    assert.equal(complete.state, 'complete'); assert.equal(complete.total, 12); assert.equal(complete.completed, 12); assert.equal(complete.files.length, 12); assert.deepEqual(attempts, ['new00000000']);
+    for (let index = 0; index < 11; index++) assert.equal(fs.readFileSync(path.join(directory, files[index].name), 'utf8'), `completed-${index}`);
+    const added = complete.files.find((file) => file.metadata.sourceUrl === replacement.url);
+    assert.equal(added.metadata.title, failedSource.title); assert.equal(added.metadata.artist, failedSource.artist); assert.equal(added.metadata.album, failedSource.album); assert.equal(added.metadata.coverUrl, failedSource.coverUrl); assert.equal(added.metadata.metadataProvider, 'youtube');
+    assert.equal(added.metadata.duration, 150);
+    assert.equal(complete.failures.length, 0);
+    const persisted = JSON.parse(fs.readFileSync(path.join(directory, '.job.json'), 'utf8')); assert.equal(persisted.sources.at(-1).url, replacement.url); assert.equal(persisted.sources.at(-1).title, failedSource.title);
+  } finally {
+    service.dispose(); assert.ok(root.startsWith(path.join(os.tmpdir(), 'music-source-replacement-'))); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const restart of [false, true]) test(`cancelled source replacement retains its missing track and retries only it${restart ? ' after restart' : ''}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-cancelled-replacement-'));
+  for (const name of ['yt-dlp.exe', 'yt-dlp', 'ffmpeg.exe', 'ffmpeg']) fs.writeFileSync(path.join(root, name), '');
+  const id = '22222222-2222-4222-8222-222222222222', directory = path.join(root, 'downloads', id), manifest = path.join(directory, '.job.json');
+  fs.mkdirSync(directory, { recursive: true });
+  const sources = [], files = [];
+  for (let index = 0; index < 11; index++) {
+    const video = `done${String(index).padStart(7, '0')}`, url = `https://www.youtube.com/watch?v=${video}`, name = `Finished-${video}.mp3`, content = `retained-${index}`;
+    fs.writeFileSync(path.join(directory, name), content);
+    sources.push({ url, title: `Finished ${index}` }); files.push({ name, size: content.length, metadata: { sourceUrl: url } });
+  }
+  const original = { url: 'https://www.youtube.com/watch?v=yTLuE57Gvsc', title: 'Original song', artist: 'Original artist', duration: 151 };
+  sources.push(original);
+  fs.writeFileSync(manifest, JSON.stringify({ id, sources, files, total: 12, completed: 11, state: 'partial', failures: [{ ...original, error: 'Sign in to confirm your age' }] }));
+  const attempts = [];
+  let heldChild;
+  const spawnProcess = (_exe, args) => {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => { if (child !== heldChild) setImmediate(() => child.emit('close', 1)); };
+    const video = new URL(args.at(-1)).searchParams.get('v'); attempts.push(video);
+    if (attempts.length === 1) heldChild = child;
+    if (attempts.length > 1) setImmediate(() => {
+      fs.writeFileSync(path.join(directory, `Replacement-${video}.mp3`), 'replacement audio fixture');
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const create = () => createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), spawnProcess, metadataProcess: copyMetadataFixture, fetchImpl: noCoverFetch });
+  let service = create();
+  try {
+    let config = await service.connect();
+    const postRetry = (body) => fetch(`${config.url}/jobs/${id}/retry`, { method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const replacement = { fromUrl: original.url, url: 'https://www.youtube.com/watch?v=new00000000' };
+    assert.equal((await postRetry({ replacements: [replacement] })).status, 200);
+    assert.equal((await fetch(`${config.url}/jobs/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${config.token}` } })).status, 200);
+    assert.equal((await postRetry({})).status, 400);
+    heldChild.emit('close', 1);
+    let cancelled = await settledJob(config, id);
+    assert.equal(cancelled.state, 'cancelled'); assert.equal(cancelled.completed, 11); assert.equal(cancelled.total, 12); assert.equal(cancelled.files.length, 11); assert.equal(cancelled.progress, 91);
+    assert.equal(cancelled.failures.length, 1); assert.equal(cancelled.failures[0].url, replacement.url); assert.equal(cancelled.failures[0].preserveMetadata, true);
+    assert.match(cancelled.failures[0].error, /取消/); assert.doesNotMatch(cancelled.failures[0].error, /confirm your age/);
+    if (restart) {
+      service.dispose();
+      // Older versions persisted this exact cancelled state with no failure entry.
+      const saved = JSON.parse(fs.readFileSync(manifest, 'utf8')); saved.failures = []; saved.error = ''; fs.writeFileSync(manifest, JSON.stringify(saved));
+      fs.writeFileSync(path.join(directory, 'Unregistered-new00000000.mp3'), 'unfinished extraction fixture');
+      fs.writeFileSync(path.join(directory, 'Empty-new00000000.mp3'), '');
+      service = create(); config = await service.connect(); cancelled = await settledJob(config, id);
+      assert.equal(cancelled.state, 'cancelled'); assert.equal(cancelled.completed, 11); assert.equal(cancelled.total, 12); assert.equal(cancelled.progress, 91);
+      assert.equal(cancelled.failures.length, 1); assert.equal(cancelled.failures[0].url, replacement.url); assert.equal(cancelled.failures[0].preserveMetadata, true);
+    }
+    assert.equal((await postRetry({})).status, 200);
+    const complete = await settledJob(config, id);
+    assert.equal(complete.state, 'complete'); assert.equal(complete.completed, 12); assert.equal(complete.total, 12); assert.equal(complete.files.length, 12); assert.equal(complete.failures.length, 0);
+    assert.deepEqual(attempts, ['new00000000', 'new00000000']);
+    for (let index = 0; index < 11; index++) assert.equal(fs.readFileSync(path.join(directory, files[index].name), 'utf8'), `retained-${index}`);
+  } finally {
+    heldChild?.emit('close', 1); service.dispose(); assert.ok(root.startsWith(path.join(os.tmpdir(), 'music-cancelled-replacement-'))); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('restart recovers actual missing MP3s from partial jobs and preserves access restriction errors', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-partial-recovery-'));
+  const id = '33333333-3333-4333-8333-333333333333', directory = path.join(root, 'downloads', id);
+  fs.mkdirSync(directory, { recursive: true });
+  const completed = { url: 'https://www.youtube.com/watch?v=done0000000', title: 'Keep this song' }, pending = { url: 'https://www.youtube.com/watch?v=new00000000', title: 'Replacement song', preserveMetadata: true };
+  const name = 'Finished-without-source-id.mp3'; fs.writeFileSync(path.join(directory, name), 'finished fixture');
+  fs.writeFileSync(path.join(directory, '.job.json'), JSON.stringify({ state: 'partial', total: 2, completed: 2, sources: [completed, pending], files: [{ name, size: 1, metadata: { sourceUrl: completed.url } }, { name: 'Missing-new00000000.mp3', size: 1 }], failures: [] }));
+  let service = createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), spawnProcess: () => { throw new Error('Restoring tasks must not download'); } });
+  try {
+    let config = await service.connect(), restored = await settledJob(config, id);
+    assert.equal(restored.state, 'partial'); assert.equal(restored.completed, 1); assert.equal(restored.total, 2); assert.equal(restored.failures.length, 1); assert.equal(restored.failures[0].url, pending.url); assert.equal(restored.failures[0].preserveMetadata, true);
+    service.dispose();
+    const saved = JSON.parse(fs.readFileSync(path.join(directory, '.job.json'), 'utf8'));
+    saved.failures = [{ ...completed, error: 'Stale conversion error' }, { ...pending, error: 'Sign in to confirm your age' }]; fs.writeFileSync(path.join(directory, '.job.json'), JSON.stringify(saved));
+    service = createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), spawnProcess: () => { throw new Error('Restoring tasks must not download'); } });
+    config = await service.connect(); restored = await settledJob(config, id);
+    assert.equal(restored.failures.length, 1); assert.equal(restored.failures[0].error, 'Sign in to confirm your age');
+    assert.equal(restored.files.length, 1); assert.equal(fs.readFileSync(path.join(directory, name), 'utf8'), 'finished fixture');
+  } finally {
+    service.dispose(); assert.ok(root.startsWith(path.join(os.tmpdir(), 'music-partial-recovery-'))); fs.rmSync(root, { recursive: true, force: true });
+  }
 });

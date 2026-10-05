@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
 const { GOOGLE_SETUP_URLS, parseOAuthConfig, validateDesktopConfig: validateConfig } = require('../src/lib/google-config');
+const { songFromFile, isMusicFile } = require('../src/lib/google-drive');
 
 const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file'];
 const DRIVE_SCOPE = DRIVE_SCOPES.join(' ');
@@ -19,7 +20,7 @@ function authRequired(message = '请重新连接 Google 账号。') {
   return error;
 }
 
-function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImpl = globalThis.fetch }) {
+function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, getMusicCache, fetchImpl = globalThis.fetch }) {
   let config;
   let tokens;
   let refreshPromise;
@@ -28,6 +29,8 @@ function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImp
   let serverPromise;
   let streamKey = crypto.randomBytes(32).toString('base64url');
   let generation = 0;
+  let identityPromise;
+  let identityGeneration = -1;
   const credentialsPath = path.join(app.getPath('userData'), 'google-account.bin');
 
   function persist() {
@@ -223,9 +226,82 @@ function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImp
   }
 
   async function streamUrl(id) {
+    const skipCache = Boolean(id && typeof id === 'object' && id.skipCache === true);
+    if (id && typeof id === 'object') id = id.id;
     if (!/^[\w-]+$/.test(id)) throw new Error('无效的歌曲 ID。');
     await getAccessToken();
+    const cache = skipCache ? null : getMusicCache?.();
+    if (cache) {
+      try { return (await cache.cache({ fileId: id })).localUri; }
+      catch (error) {
+        // A disk or artwork failure must not prevent online playback. Login failures remain actionable.
+        if (error.code === 'GOOGLE_AUTH_REQUIRED') throw error;
+      }
+    }
     return `${await ensureServer()}/stream/${streamKey}/${id}`;
+  }
+
+  async function driveFetch(url, options = {}) {
+    const activeGeneration = generation;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const accessToken = await getAccessToken({ force: attempt > 0 });
+      if (activeGeneration !== generation) throw authRequired('Google 账号已切换，请重新选择歌曲。');
+      const response = await fetchImpl(url, { ...options, headers: { ...options.headers, Authorization: `Bearer ${accessToken}` }, signal: options.signal || AbortSignal.timeout(120000) });
+      if (activeGeneration !== generation) { await response.body?.cancel(); throw authRequired('Google 账号已切换，请重新选择歌曲。'); }
+      if (response.status === 401 && attempt === 0) { await response.body?.cancel(); continue; }
+      if (!response.ok) { await response.body?.cancel(); throw response.status === 401 ? authRequired() : new Error(`Google Drive 暂时无法读取歌曲（${response.status}）。`); }
+      return response;
+    }
+    throw authRequired();
+  }
+
+  async function cacheIdentity() {
+    await getAccessToken();
+    if (!identityPromise || identityGeneration !== generation) {
+      identityGeneration = generation;
+      const activeGeneration = generation;
+      identityPromise = driveFetch('https://www.googleapis.com/drive/v3/about?fields=user(permissionId,emailAddress)').then((response) => response.json()).then((data) => {
+        if (activeGeneration !== generation) throw authRequired('Google 账号已切换，请重新选择歌曲。');
+        const id = data.user?.permissionId;
+        const email = data.user?.emailAddress;
+        if (!/^[\w-]{1,256}$/.test(id || '') || typeof email !== 'string' || !email.includes('@')) throw new Error('无法确认待缓存歌曲的 Google 账号。');
+        return { id, email };
+      }).catch((error) => { if (activeGeneration === identityGeneration) identityPromise = undefined; throw error; });
+    }
+    return identityPromise;
+  }
+
+  async function cacheSource({ fileId, identity }) {
+    if (!/^[\w-]{1,256}$/.test(fileId || '')) throw new Error('无效的歌曲 ID。');
+    const currentIdentity = await cacheIdentity();
+    if (identity?.id !== currentIdentity.id) throw authRequired('Google 账号已切换，请重新选择歌曲。');
+    const activeGeneration = generation;
+    const details = await (await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,size,appProperties,thumbnailLink&supportsAllDrives=true`)).json();
+    if (!isMusicFile(details)) throw new Error('这个 Drive 文件不是受支持的音频。');
+    const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`);
+    return { response, metadata: { ...songFromFile(details), preferEmbeddedTitle: !details.appProperties?.title, preferEmbeddedAlbum: !details.appProperties?.album }, validate: () => {
+      if (activeGeneration !== generation) throw authRequired('Google 账号已切换，请重新选择歌曲。');
+    }, getCover: async () => {
+      if (!details.thumbnailLink) return null;
+      let url;
+      try { url = new URL(details.thumbnailLink); } catch { return null; }
+      if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !/^lh\d+\.googleusercontent\.com$/.test(url.hostname)) return null;
+      // Restrict authenticated thumbnails to Drive's documented image hosts and reject all redirects.
+      const image = await driveFetch(url.href, { redirect: 'error', signal: AbortSignal.timeout(15000) });
+      const limit = 5 * 1024 * 1024;
+      if (Number(image.headers.get('content-length')) > limit) { await image.body?.cancel(); return null; }
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of Readable.fromWeb(image.body)) {
+        size += chunk.length;
+        if (size > limit) throw new Error('歌曲封面超过大小限制。');
+        chunks.push(chunk);
+      }
+      const data = Buffer.concat(chunks);
+      const mimeType = data[0] === 255 && data[1] === 216 && data[2] === 255 ? 'image/jpeg'
+        : data.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => data[index] === byte) ? 'image/png' : '';
+      return mimeType ? { data, mimeType } : null;
+    } };
   }
 
   function dispose() {
@@ -234,7 +310,7 @@ function createGoogleAuth({ app, shell, safeStorage, dialog, getWindow, fetchImp
     server?.close();
   }
 
-  return { initialize, importConfig, configure, openSetup, status, signIn, signOut, getAccessToken, streamUrl, dispose };
+  return { initialize, importConfig, configure, openSetup, status, signIn, signOut, getAccessToken, streamUrl, cacheIdentity, cacheSource, dispose };
 }
 
 module.exports = { createGoogleAuth, createPkcePair, validateConfig };

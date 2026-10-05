@@ -1,0 +1,24 @@
+.backdrop { position:fixed; inset:0; z-index:160; }
+.menu { position:fixed; width:min(250px,calc(100vw - 16px)); padding:7px; overflow:auto; max-height:calc(100dvh - 16px); border:1px solid #eee7e7; border-radius:15px; background:#fff; box-shadow:0 12px 44px #25132326; }
+.menu header { padding:10px 11px 12px; }
+.menu header b,.menu header small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.menu header b { font-size:14px; font-weight:600; }
+.menu header small { margin-top:5px; color:#85808a; font-size:12px; }
+.menu button { display:block; width:100%; min-height:42px; padding:10px 11px; text-align:left; border-radius:9px; font-size:13px; }
+.menu button:hover:not(:disabled),.menu button:focus-visible { background:#fff0f1; outline:none; }
+.menu button:disabled { color:#aaa; cursor:default; }
+.danger { color:#d7323b; }
+.divider { height:1px; margin:5px 4px; background:#f0ebeb; }
+.hint { margin:3px 10px 9px; color:#999; font-size:11px; line-height:1.6; }
+.confirmBackdrop { position:fixed; inset:0; z-index:170; display:grid; place-items:center; padding:20px; background:#19111b66; }
+.dialog { width:min(420px,100%); padding:25px; border-radius:22px; background:#fff; box-shadow:0 20px 70px #0003; }
+.dialog h2 { margin:0 0 20px; font-size:20px; }
+.song { display:flex; flex-direction:column; gap:6px; padding:15px; border-radius:12px; background:#faf4f5; overflow-wrap:anywhere; }
+.song b { font-size:16px; }.song span { color:#777; font-size:13px; }
+.dialog p { margin:17px 0; font-size:13px; line-height:1.8; color:#777; overflow-wrap:anywhere; }
+.dialog p.error { color:#c32d39; }
+.dialog footer { display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+.dialog footer button { min-height:44px; padding:11px 15px; border-radius:12px; background:#f5f3f4; font-size:13px; }
+.dialog footer button.confirmButton { color:#fff; background:#e43e4b; }
+.dialog footer button:focus-visible { outline:2px solid #ec4141; outline-offset:3px; }
+.dialog footer button:disabled { opacity:.55; cursor:wait; }

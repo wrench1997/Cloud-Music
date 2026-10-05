@@ -102,6 +102,7 @@ final class NativeDownloadsManager {
         synchronized (store) {
             job = store.job(id);
             NativeDownloadPolicy.requireRestartIdle(id, activeId, job.optBoolean("cancelled"), job.optString("state"));
+            JSONObject retry = "retry".equals(action) ? NativeDownloadRetryPolicy.prepare(job, data) : null;
             if ("running".equals(job.optString("state"))) {
                 if ("retry".equals(action)) return copy(job);
                 JSONObject requested = NativeDownloadPolicy.cloud(data.optJSONObject("cloud")), current = job.getJSONObject("cloud");
@@ -115,6 +116,7 @@ final class NativeDownloadsManager {
                 if (job.getJSONArray("files").length() == 0) throw new IOException("任务尚未生成可上传 MP3。");
                 job.put("cloud", cloud);
             } else if (!"retry".equals(action)) throw new IOException("不支持的下载任务操作。");
+            else job.put("sources", retry.getJSONArray("sources")).put("failures", retry.getJSONArray("failures"));
             job.put("cancelled", false).put("state", "running").put("phase", "queued").put("error", ""); store.persist(job);
         }
         enqueue(id, "upload".equals(action));

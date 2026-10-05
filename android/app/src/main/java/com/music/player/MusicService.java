@@ -212,6 +212,26 @@ public class MusicService extends MediaSessionService {
         }
     }
 
+    /** Called on the player thread; removing another song keeps the current decoder and position. */
+    public boolean removeFromQueue(String id) {
+        boolean removedCurrent = player.getCurrentMediaItem() != null
+            && id.equals(player.getCurrentMediaItem().mediaId);
+        if (removedCurrent) {
+            player.pause();
+            player.stop();
+        }
+        for (int index = player.getMediaItemCount() - 1; index >= 0; index--) {
+            if (!id.equals(player.getMediaItemAt(index).mediaId)) continue;
+            player.removeMediaItem(index);
+            if (index < durationHints.size()) durationHints.remove(index);
+        }
+        if (removedCurrent || player.getMediaItemCount() == 0) {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            if (player.getMediaItemCount() == 0) stopSelf();
+        }
+        return removedCurrent;
+    }
+
     private PendingIntent serviceAction(String action, int requestCode) {
         Intent intent = new Intent(this, MusicService.class).setAction(action);
         return PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -261,6 +281,7 @@ public class MusicService extends MediaSessionService {
         result.putBoolean("seekable", player.getMediaItemCount() > 0 && (player.isCurrentMediaItemSeekable()
             || (!player.isCurrentMediaItemLive() && player.getDuration() <= 0 && duration > 0)));
         result.putInt("index", player.getMediaItemCount() > 0 ? player.getCurrentMediaItemIndex() : -1);
+        result.putString("trackId", player.getCurrentMediaItem() == null ? "" : player.getCurrentMediaItem().mediaId);
         result.putInt("repeatMode", player.getRepeatMode());
         result.putBoolean("shuffleEnabled", player.getShuffleModeEnabled());
         result.putString("error", playbackError);

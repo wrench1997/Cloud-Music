@@ -105,6 +105,27 @@ final class NativeDownloadPolicy {
         if (!spotify.isEmpty()) result.put("spotifyId", spotify);
         return result;
     }
+    static JSONObject downloadMetadata(JSONObject source, JSONObject info, String url) throws Exception {
+        boolean preserve = "spotify".equals(source.optString("metadataProvider")) || source.optBoolean("preserveMetadata", false);
+        JSONObject result = new JSONObject(source.toString());
+        String title = source.optString("title", "");
+        String musicTitle = text(info.opt("track"), 300);
+        String variants = "\\b(?:slowed|slow|sped|remix|live|acoustic|instrumental|nightcore|super|ultra)\\b";
+        if (!preserve && !musicTitle.isEmpty() && !java.util.regex.Pattern.compile(variants, java.util.regex.Pattern.CASE_INSENSITIVE).matcher(title).find()) title = musicTitle;
+        if (title.isEmpty()) title = text(info.opt("title"), 300);
+        String artist = artist(info.has("artist") ? info.opt("artist") : info.opt("artists"));
+        if (preserve && !source.optString("artist").isEmpty()) artist = source.optString("artist");
+        if (artist.isEmpty()) artist = source.optString("artist", text(info.opt("uploader"), 300));
+        String cover = source.optString("coverUrl", "");
+        if (cover.isEmpty()) cover = cover(info.opt("thumbnail"));
+        if (cover.isEmpty()) cover = "https://i.ytimg.com/vi/" + videoId(url) + "/hqdefault.jpg";
+        double actualDuration = info.optDouble("duration", 0), previousDuration = source.optDouble("duration", 0);
+        double duration = Double.isFinite(actualDuration) && actualDuration > 0 ? actualDuration
+            : Double.isFinite(previousDuration) && previousDuration > 0 ? previousDuration : 0;
+        return result.put("title", title.isEmpty() ? "歌曲" : title).put("artist", artist)
+            .put("album", source.optString("album").isEmpty() ? info.optString("album", "") : source.optString("album"))
+            .put("duration", duration).put("sourceUrl", url).put("coverUrl", cover);
+    }
     static String safeName(String value) {
         String clean = text(value, 240).replaceAll("[<>:\"/\\\\|?*]", "_").replaceAll("[. ]+$", "");
         return truncateUtf8(clean, 150);

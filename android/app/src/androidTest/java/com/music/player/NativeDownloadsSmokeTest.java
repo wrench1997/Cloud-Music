@@ -116,11 +116,17 @@ public class NativeDownloadsSmokeTest {
             command(context, MusicService.ACTION_VOLUME, "volume", 0f);
             waitPlayback(value -> MusicService.getInstance() != null);
             JSONObject metadata = file.getJSONObject("metadata");
-            JSONArray queue = new JSONArray().put(new JSONObject().put("id", file.getString("id")).put("title", metadata.getString("title"))
-                .put("artist", metadata.getString("artist")).put("url", uri).put("duration", metadata.getDouble("duration")));
-            command(context, MusicService.ACTION_QUEUE, "tracks", queue.toString());
+            String trackId = file.getString("id");
+            JSONObject track = new JSONObject().put("id", trackId).put("title", metadata.getString("title"))
+                .put("artist", metadata.getString("artist")).put("url", uri).put("duration", metadata.getDouble("duration"));
+            // Temporary queue copies point to this test's local file, never to user cloud files.
+            JSONArray queue = new JSONArray().put(new JSONObject(track.toString()).put("id", "smoke-before"))
+                .put(track).put(new JSONObject(track.toString()).put("id", "smoke-after"));
+            context.startService(new android.content.Intent(context, MusicService.class).setAction(MusicService.ACTION_QUEUE)
+                .putExtra("tracks", queue.toString()).putExtra("index", 1));
             command(context, MusicService.ACTION_PAUSE, "", null);
-            Bundle ready = waitPlayback(value -> value.getInt("index", -1) == 0 && value.getLong("duration") > 0 && value.getBoolean("seekable") && !value.getBoolean("buffering"));
+            Bundle ready = waitPlayback(value -> value.getInt("index", -1) == 1 && trackId.equals(value.getString("trackId"))
+                && value.getLong("duration") > 0 && value.getBoolean("seekable") && !value.getBoolean("buffering"));
             long target = ready.getLong("duration") / 2;
             command(context, MusicService.ACTION_SEEK, "position", target);
             waitPlayback(value -> Math.abs(value.getLong("position") - target) < 2000);
@@ -128,11 +134,33 @@ public class NativeDownloadsSmokeTest {
             waitPlayback(value -> value.getBoolean("shuffleEnabled") && value.getInt("repeatMode") == androidx.media3.common.Player.REPEAT_MODE_ALL);
             command(context, MusicService.ACTION_REPEAT, "mode", androidx.media3.common.Player.REPEAT_MODE_ONE);
             waitPlayback(value -> value.getInt("repeatMode") == androidx.media3.common.Player.REPEAT_MODE_ONE && !value.getBoolean("shuffleEnabled"));
+            assertFalse(removeQueueSong("smoke-before"));
+            Bundle paused = waitPlayback(value -> value.getInt("index", -1) == 0 && trackId.equals(value.getString("trackId")));
+            assertFalse("Deleting another queue item must keep paused playback paused", paused.getBoolean("playWhenReady"));
+            assertTrue("Deleting an earlier queue item must retain the current position", Math.abs(paused.getLong("position") - target) < 2000);
+            command(context, MusicService.ACTION_PLAY, "", null);
+            waitPlayback(value -> value.getBoolean("playing"));
+            long playingPosition = playbackState().getLong("position");
+            assertFalse(removeQueueSong("smoke-after"));
+            Bundle playing = waitPlayback(value -> value.getBoolean("playing") && trackId.equals(value.getString("trackId")));
+            assertTrue("Deleting another queue item must keep the current song playing at its position", Math.abs(playing.getLong("position") - playingPosition) < 2000);
+            assertTrue(removeQueueSong(trackId));
+            waitPlayback(value -> !value.getBoolean("playWhenReady") && !value.getBoolean("playing") && value.getInt("index", -1) == -1);
         } finally {
             command(context, MusicService.ACTION_PAUSE, "", null);
             command(context, MusicService.ACTION_REPEAT, "mode", previous.getInt("repeatMode"));
             command(context, MusicService.ACTION_SHUFFLE, "enabled", previous.getBoolean("shuffleEnabled"));
             command(context, MusicService.ACTION_VOLUME, "volume", volume.get());
         }
+    }
+
+    private boolean removeQueueSong(String id) {
+        java.util.concurrent.atomic.AtomicBoolean removedCurrent = new java.util.concurrent.atomic.AtomicBoolean();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            MusicService service = MusicService.getInstance();
+            assertNotNull(service);
+            removedCurrent.set(service.removeFromQueue(id));
+        });
+        return removedCurrent.get();
     }
 }

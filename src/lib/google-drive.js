@@ -86,12 +86,17 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
   }
 
   async function authorizedFetch(url, options = {}) {
+    const { assertCurrent, ...requestOptions } = options;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      assertCurrent?.();
+      requestOptions.signal?.throwIfAborted();
       const token = await getAccessToken({ force: attempt > 0 });
+      assertCurrent?.();
+      requestOptions.signal?.throwIfAborted();
       const response = await fetchImpl(url, {
-        ...options,
-        signal: options.signal || AbortSignal.timeout(30000),
-        headers: { ...options.headers, Authorization: `Bearer ${token}` },
+        ...requestOptions,
+        signal: requestOptions.signal || AbortSignal.timeout(30000),
+        headers: { ...requestOptions.headers, Authorization: `Bearer ${token}` },
       });
       if (response.status !== 401 || attempt > 0) return response;
     }
@@ -276,6 +281,37 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
 
   function updateMusic(id, file, options) { return writeMusic(file, { ...options, id: validFileId(id) }); }
 
+  async function trashSong(id, { signal, assertCurrent } = {}) {
+    validFileId(id);
+    if (id === 'root') throw new Error('只能将单首云盘歌曲移到回收站。');
+    try {
+      const url = `${DRIVE_API}/files/${id}?fields=id,name,mimeType,trashed,capabilities(canTrash)&supportsAllDrives=true`;
+      const file = await json(url, { signal, assertCurrent });
+      assertCurrent?.();
+      signal?.throwIfAborted();
+      if (file.id !== id || file.mimeType === FOLDER_MIME || !isMusicFile(file)) throw new Error('这不是可删除的歌曲文件，请刷新曲库后重试。');
+      if (file.trashed) { invalidateArtwork(id); return { id, trashed: true }; }
+      if (file.capabilities?.canTrash !== true) {
+        throw Object.assign(new Error('当前 Google 账号没有将这首歌移到回收站的权限，可在 Google Drive 中检查文件所有权或共享权限。'), { code: 'DRIVE_TRASH_DENIED' });
+      }
+      const result = await json(`${DRIVE_API}/files/${id}?fields=id,trashed&supportsAllDrives=true`, {
+        method: 'PATCH', signal, assertCurrent, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }),
+      });
+      if (result.id !== id || result.trashed !== true) throw new Error('Google Drive 未确认歌曲已进入回收站，请刷新曲库后检查。');
+      invalidateArtwork(id);
+      return result;
+    } catch (error) {
+      if (error.status === 403 && ['insufficientPermissions', 'appNotAuthorizedToFile'].includes(error.code)) {
+        error.message = 'Google Drive 拒绝删除：当前授权只能管理通过本应用创建或授权的文件。这首歌仍保留在曲库，可前往 Google Drive 移到回收站。';
+      } else if (error.status === 403 && ['insufficientFilePermissions', 'DRIVE_ERROR'].includes(error.code)) {
+        error.message = 'Google Drive 拒绝删除：当前账号或应用没有管理这首歌的权限。这首歌仍保留在曲库，可在 Google Drive 中检查文件权限。';
+      } else if (error.status === 404) {
+        error.message = '云盘中已找不到这首歌，或当前账号无法访问。请刷新曲库后重试。';
+      }
+      throw error;
+    }
+  }
+
   async function updateSongMetadata(id, metadata, { rename = false, signal } = {}) {
     validFileId(id);
     const existing = await json(`${DRIVE_API}/files/${id}?fields=${FILE_FIELDS}&supportsAllDrives=true`, { signal });
@@ -381,7 +417,7 @@ function createGoogleDriveApi(getAccessToken, { fetchImpl = globalThis.fetch, sl
   }
 
   return {
-    provider: 'google', base: 'Google Drive', ensureFolder, listSongs, getFolder, listDirectory, loadState, saveState, uploadMusic, updateMusic, updateSongMetadata, artwork,
+    provider: 'google', base: 'Google Drive', ensureFolder, listSongs, getFolder, listDirectory, loadState, saveState, uploadMusic, updateMusic, trashSong, updateSongMetadata, artwork,
     flush: () => saveChain,
     getAccount: () => json(`${DRIVE_API}/about?fields=user(displayName,emailAddress,photoLink,permissionId),storageQuota(limit,usage)`),
     mediaUrl: (id) => `${DRIVE_API}/files/${validFileId(id)}?alt=media&supportsAllDrives=true`,

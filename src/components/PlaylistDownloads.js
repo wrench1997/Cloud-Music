@@ -5,6 +5,8 @@ import { recommendSource } from '../lib/source-matching';
 import { transferDownloadedFiles } from '../lib/downloaded-transfers';
 import { ACTIVE_STATES, normalizeDownloadJob, mergeDownloadJobs, downloadJobLabel, cloudPhase, cloudStatusLabel, nativeCloudConfig, needsNativeCloudUpload } from '../lib/download-job-state';
 import MusicDiscovery from './MusicDiscovery';
+import { downloadFailureReason, canonicalYoutubeSource, completedSourceUrls, replacementSearch } from '../lib/download-failure-policy';
+import styles from './PlaylistDownloads.module.css';
 
 export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUpload, onRepairUpload, onGoogleLogin, uploadAccount = '', uploadEmail = '', onPlayOriginal, onPlayDownloaded, onLibraryChanged, sourceRadio, active: viewActive = true, discoveryMode = false, taste, playlists, onShowDownloads, onShowPlaylist }) {
   const [connection, setConnection] = useState(null);
@@ -23,6 +25,8 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const [connecting, setConnecting] = useState(true);
   const [transferring, setTransferring] = useState(false);
   const [discoveredEntries, setDiscoveredEntries] = useState(false);
+  const [failureCandidates, setFailureCandidates] = useState({});
+  const [sourceReplacements, setSourceReplacements] = useState({});
   const runningJob = jobs.find((task) => ACTIVE_STATES.has(task.state));
   const canUpload = Boolean(onUpload);
   const handled = useRef(new Set());
@@ -261,6 +265,27 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     const result = await request(connection, '/match', entry);
     setCandidates((value) => ({ ...value, [index]: result }));
   });
+  const failureKey = (task, failure) => `${task.id}:${failure.url}`;
+  const findFailureSource = (task, failure) => perform(async () => {
+    const search = replacementSearch(failure);
+    if (!search) throw new Error('这首歌曲缺少名称，请在发现音乐中搜索其他音源。');
+    const result = await request(connection, '/match', { search });
+    const used = completedSourceUrls(task.files);
+    for (const item of task.failures) { try { used.add(canonicalYoutubeSource(item.url)); } catch { /* A stale source is rejected again by the server. */ } }
+    const available = result.filter((candidate) => {
+      try { return !used.has(canonicalYoutubeSource(candidate.url)); } catch { return false; }
+    });
+    setFailureCandidates((value) => ({ ...value, [failureKey(task, failure)]: available }));
+  });
+  const retryFailures = (task) => perform(async () => {
+    const replacements = task.failures.flatMap((failure) => {
+      const selectedSource = sourceReplacements[failureKey(task, failure)];
+      return selectedSource ? [{ fromUrl: failure.url, url: selectedSource.url }] : [];
+    });
+    selectJob(await request(connection, `/jobs/${task.id}/retry`, { replacements }));
+    setSourceReplacements((value) => Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith(`${task.id}:`))));
+    setNotice('正在继续未完成的曲目，已下载歌曲会保留。');
+  });
   const startDownload = async (tracks) => {
     if (!connection) throw new Error('下载功能正在准备，请稍后重试。');
     const result = await request(connection, '/jobs', { entries: tracks.map((entry) => ({
@@ -365,8 +390,28 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       </section>}
       {!discoveryMode && job && <div className="download-job"><p>{downloadJobLabel(job)}{ACTIVE_STATES.has(job.state) && job.title ? `：${job.title}` : ''}{ACTIVE_STATES.has(job.state) ? ` · ${job.progress}%` : ` · 已完成 ${job.completed} / ${job.total}`}</p>{job.state !== 'failed' && <progress aria-label="下载进度" value={job.progress} max="100" />}
         {ACTIVE_STATES.has(job.state) && <button className="outline-button" disabled={busy} onClick={() => perform(async () => receiveJobs([await request(connection, `/jobs/${job.id}`, null, 'DELETE')]))}>取消下载</button>}
-        {job.error && <details className="login-error"><summary>失败详情（{job.failures?.length || 1} 首）</summary><p style={{ whiteSpace: 'pre-wrap' }}>{job.error}</p></details>}
-        {Boolean(job.failures?.length) && !ACTIVE_STATES.has(job.state) && <button className="outline-button" disabled={busy} onClick={() => perform(async () => selectJob(await request(connection, `/jobs/${job.id}/retry`, {})))}>重试失败曲目</button>}
+        {Boolean(job.failures?.length) && !ACTIVE_STATES.has(job.state) && <section className={styles.failures} aria-label="未完成曲目">
+          <h3>还有 {job.failures.length} 首未完成</h3><p>已下载的 {job.completed} 首会保留。更换音源会保留原歌曲名称、歌手和封面。</p>
+          {job.failures.map((failure) => {
+            const reason = downloadFailureReason(failure), key = failureKey(job, failure), selectedSource = sourceReplacements[key];
+            return <article key={key} className={styles.failure}>
+              <div><strong>{failure.title || '未完成歌曲'}</strong>{failure.artist && <span className={styles.artist}>{failure.artist}</span>}</div>
+              <p className={styles.reason}>{reason.label}</p><p>{reason.detail}</p>
+              <div className={styles.actions}><button className="outline-button" disabled={busy} onClick={() => findFailureSource(job, failure)}>查找其他音源</button><a href={failure.url} target="_blank" rel="noopener noreferrer">查看原音源 ↗</a></div>
+              {failureCandidates[key] && <div className={styles.candidates}><p>候选来自 YouTube 搜索，请核对版本；继续下载时会确认是否可用。</p>
+                {failureCandidates[key].length ? failureCandidates[key].map((candidate) => <div key={candidate.url} className={styles.candidate}>
+                  <span><strong>{candidate.title}</strong><small>{candidate.artist}{candidate.duration ? ` · ${Math.round(candidate.duration)} 秒` : ''}</small></span>
+                  <a href={candidate.url} target="_blank" rel="noopener noreferrer">核对版本 ↗</a>
+                  <button className="outline-button" disabled={busy} aria-pressed={selectedSource?.url === candidate.url} onClick={() => setSourceReplacements((value) => ({ ...value, [key]: candidate }))}>{selectedSource?.url === candidate.url ? '已选择' : '选择此音源'}</button>
+                </div>) : <p>未找到其他候选，可以在发现音乐中搜索其他版本。</p>}
+              </div>}
+              {selectedSource && <p className={styles.selection}>已选：{selectedSource.title}。点击下方按钮继续下载。</p>}
+            </article>;
+          })}
+          <button className="red-button" disabled={busy || (!connection.native && Boolean(runningJob)) || job.failures.some((failure) => !downloadFailureReason(failure).canRetry && !sourceReplacements[failureKey(job, failure)])} onClick={() => retryFailures(job)}>{job.failures.some((failure) => sourceReplacements[failureKey(job, failure)]) ? '更换音源并继续' : '重试失败曲目'}</button>
+          {job.failures.some((failure) => !downloadFailureReason(failure).canRetry && !sourceReplacements[failureKey(job, failure)]) && <p>请先为限制访问的曲目选择其他音源，再继续下载。</p>}
+        </section>}
+        {job.error && <details className="login-error"><summary>技术详情（{job.failures?.length || 1} 首）</summary><p style={{ whiteSpace: 'pre-wrap' }}>{job.error}</p></details>}
         {!connection.native && Boolean(job.files.length) && <div className="download-actions"><button className="outline-button" disabled={busy || transferring || !playlist || discoveredEntries || job.state === 'running'} onClick={() => perform(async () => {
           repairIntent.current = { id: job.id, account: currentAccount.current };
           let repairedJob;

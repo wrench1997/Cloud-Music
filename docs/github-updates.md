@@ -2,6 +2,8 @@
 
 Windows 安装版启动后自动检查本仓库的正式 GitHub Release，下载完成后点击“重启并更新”。关闭到托盘不会安装更新。开发模式不检查更新。
 
+手动入口在 Windows 侧边栏“设置”→“应用更新”→“检查更新”。尚未发布的草稿和预发布版本不会被当作正式更新。
+
 Android 启动后自动检查最新正式 Release，发现新版本后在应用内下载和安装。下载完成会校验 SHA-256、包名、版本号和签名证书；签名必须与已安装应用一致。Android 首次可能要求允许本应用安装 APK，随后由系统安装器确认更新，应用数据保留。
 
 发布流程由 `.github/workflows/release.yml` 定义。更新 `package.json` 版本、`package-lock.json` 根版本，以及 `android/app/build.gradle` 的 `versionName` 和递增的 `versionCode`，推送匹配电脑版版本的 Git tag（例如 `v1.2.0`），GitHub Actions 会测试、构建两端并发布安装包和更新元数据。

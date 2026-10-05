@@ -5,11 +5,12 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { createGoogleAuth, createPkcePair, validateConfig } = require('../electron/google-auth');
+const { createMusicCache } = require('../electron/music-cache');
 
 const { DRIVE_SCOPES, DRIVE_SCOPE: scope } = require('../src/lib/google-drive');
 const tokenResponse = (token, refreshToken) => ({ access_token: token, ...(refreshToken ? { refresh_token: refreshToken } : {}), expires_in: 3600, scope });
 
-async function fixture(t, fetchImpl, { importCredentials = true } = {}) {
+async function fixture(t, fetchImpl, { importCredentials = true, getMusicCache } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yungan-music-test-'));
   const oauthPath = path.join(directory, 'oauth.json');
   fs.writeFileSync(oauthPath, JSON.stringify({ installed: { client_id: 'test-client.apps.googleusercontent.com', client_secret: 'public-desktop-secret' } }));
@@ -29,7 +30,7 @@ async function fixture(t, fetchImpl, { importCredentials = true } = {}) {
     },
   };
   let onOpen;
-  const deps = { app: { getPath: () => directory }, safeStorage, shell: { openExternal: async (url) => onOpen(new URL(url)) }, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [oauthPath] }) }, getWindow: () => undefined, fetchImpl };
+  const deps = { app: { getPath: () => directory }, safeStorage, shell: { openExternal: async (url) => onOpen(new URL(url)) }, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [oauthPath] }) }, getWindow: () => undefined, getMusicCache, fetchImpl };
   const auth = createGoogleAuth(deps);
   auth.initialize();
   if (importCredentials) await auth.importConfig();
@@ -261,4 +262,82 @@ test('desktop login rejects granting only one of the two required Drive permissi
     assert.equal(auth.status().connected, false);
     await assert.rejects(auth.streamUrl('song'), { code: 'GOOGLE_AUTH_REQUIRED' });
   }
+});
+
+test('desktop cloud playback saves once using verified Drive identity and remains locally playable after logout', async (t) => {
+  let cache;
+  let mediaRequests = 0, aboutRequests = 0;
+  const { auth, begin, directory } = await fixture(t, async (url, options) => {
+    if (url === 'https://oauth2.googleapis.com/token') return Response.json(tokenResponse('cache-private-access', 'cache-private-refresh'));
+    assert.equal(options.headers.Authorization, 'Bearer cache-private-access');
+    if (url.includes('/about?')) { aboutRequests += 1; return Response.json({ user: { permissionId: 'real-permission-id', emailAddress: 'current-account@example.test' } }); }
+    if (url.includes('alt=media')) { mediaRequests += 1; return new Response('saved audio', { headers: { 'content-length': '11', 'content-type': 'audio/mpeg' } }); }
+    return Response.json({ id: 'cache-track', name: 'Artist - Title.mp3', mimeType: 'audio/mpeg', size: '11', appProperties: { title: 'Song title', artist: 'Song artist', duration: '90' } });
+  }, { getMusicCache: () => cache });
+  cache = createMusicCache({ directory: path.join(directory, 'music-cache'), getIdentity: auth.cacheIdentity, getSource: auth.cacheSource });
+  t.after(() => cache.dispose());
+  const login = await begin(); await fetch(login.callback()); await login.pending;
+  const url = await auth.streamUrl('cache-track');
+  assert.ok(url.includes('/music-cache/')); assert.equal(url.includes('cache-private-access'), false);
+  assert.equal(await (await fetch(url)).text(), 'saved audio');
+  assert.equal(await auth.streamUrl('cache-track'), url); assert.equal(mediaRequests, 1); assert.equal(aboutRequests, 1);
+  await auth.signOut();
+  const { songs } = await cache.list();
+  assert.equal(songs[0].title, 'Song title'); assert.equal(songs[0].originalAccount.id, 'real-permission-id');
+  assert.equal(await (await fetch(songs[0].localUri)).text(), 'saved audio');
+  assert.equal(auth.status().connected, false); assert.equal(mediaRequests, 1);
+});
+
+test('explicit online fallback skips a failed disk cache instead of repeating the same download', async (t) => {
+  let attempts = 0;
+  const { auth, begin } = await fixture(t, async () => Response.json(tokenResponse('fallback-access', 'fallback-refresh')), {
+    getMusicCache: () => ({ cache: async () => { attempts += 1; throw new Error('disk full'); } }),
+  });
+  const login = await begin(); await fetch(login.callback()); await login.pending;
+  assert.ok((await auth.streamUrl('track')).includes('/stream/'));
+  assert.ok((await auth.streamUrl({ id: 'track', skipCache: true })).includes('/stream/'));
+  assert.equal(attempts, 1);
+});
+
+test('cache source refreshes a rejected token once and refuses identity supplied for another account', async (t) => {
+  let refreshes = 0, aboutRequests = 0;
+  const { auth, begin } = await fixture(t, async (url, options) => {
+    if (url === 'https://oauth2.googleapis.com/token') {
+      const refresh = new URLSearchParams(options.body).get('grant_type') === 'refresh_token';
+      if (refresh) refreshes += 1;
+      return Response.json(tokenResponse(refresh ? 'fresh-private' : 'old-private', 'saved-refresh'));
+    }
+    if (url.includes('/about?')) {
+      aboutRequests += 1;
+      if (options.headers.Authorization === 'Bearer old-private') return new Response('', { status: 401 });
+      return Response.json({ user: { permissionId: 'account-verified', emailAddress: 'verified@example.test' } });
+    }
+    throw new Error('Another account must not reach media or metadata requests');
+  });
+  const login = await begin(); await fetch(login.callback()); await login.pending;
+  assert.deepEqual(await auth.cacheIdentity(), { id: 'account-verified', email: 'verified@example.test' });
+  assert.equal(refreshes, 1); assert.equal(aboutRequests, 2);
+  await assert.rejects(auth.cacheSource({ fileId: 'track', identity: { id: 'other-account' } }), { code: 'GOOGLE_AUTH_REQUIRED' });
+  await assert.rejects(auth.cacheSource({ fileId: '../outside', identity: { id: 'account-verified' } }), /无效/);
+});
+
+test('cache thumbnails never send Google tokens to arbitrary hosts or follow authenticated redirects', async (t) => {
+  let thumbnail = 'https://untrusted.example/picture.jpg';
+  let imageRequests = 0;
+  const { auth, begin } = await fixture(t, async (url, options) => {
+    if (url === 'https://oauth2.googleapis.com/token') return Response.json(tokenResponse('private-thumbnail-token', 'refresh'));
+    if (url.includes('/about?')) return Response.json({ user: { permissionId: 'verified', emailAddress: 'verified@example.test' } });
+    if (url.includes('alt=media')) return new Response('audio');
+    if (url.startsWith('https://www.googleapis.com/drive/v3/files/')) return Response.json({ id: 'track', name: 'Song.mp3', mimeType: 'audio/mpeg', thumbnailLink: thumbnail });
+    imageRequests += 1;
+    assert.equal(new URL(url).hostname, 'lh3.googleusercontent.com'); assert.equal(options.redirect, 'error');
+    throw new TypeError('redirect rejected');
+  });
+  const login = await begin(); await fetch(login.callback()); await login.pending;
+  const identity = await auth.cacheIdentity();
+  let source = await auth.cacheSource({ fileId: 'track', identity });
+  assert.equal(await source.getCover(), null); assert.equal(imageRequests, 0); await source.response.body.cancel();
+  thumbnail = 'https://lh3.googleusercontent.com/image';
+  source = await auth.cacheSource({ fileId: 'track', identity });
+  await assert.rejects(source.getCover(), /redirect rejected/); assert.equal(imageRequests, 1); await source.response.body.cancel();
 });

@@ -23,7 +23,8 @@ public class NativeDownloadRunnerTest {
         store.add(job); return job;
     }
     private static class FakeEngine implements NativeDownloadEngine {
-        Set<String> fail = new HashSet<>(); int calls;
+        Set<String> fail = new HashSet<>(); int calls; String failureMessage = "fake source unavailable";
+        java.util.List<String> requestedUrls = new java.util.ArrayList<>();
         public void initialize() {}
         public JSONObject inspect(String url) { return new JSONObject(); }
         public JSONObject search(JSONObject value) { return new JSONObject(); }
@@ -31,12 +32,14 @@ public class NativeDownloadRunnerTest {
         public JSONObject match(JSONObject value) { return new JSONObject(); }
         public void cancel(String id) {}
         public JSONObject download(JSONObject source, File directory, String id, Progress progress, Cancelled cancelled) throws Exception {
-            calls++; if (fail.contains(source.getString("title"))) throw new IOException("fake source unavailable");
+            calls++; requestedUrls.add(source.getString("url")); if (fail.contains(source.getString("title"))) throw new IOException(failureMessage);
             if (cancelled.get()) throw new IOException("cancelled");
             String name = source.getString("title") + ".mp3"; File file = new File(directory, name);
             try (FileOutputStream out = new FileOutputStream(file)) { out.write(new byte[256]); }
+            JSONObject downloadedMetadata = NativeDownloadPolicy.downloadMetadata(source, new JSONObject().put("track", "Candidate song")
+                .put("artist", "Candidate artist").put("album", "Candidate album").put("duration", 999), source.getString("url"));
             return new JSONObject().put("name", name).put("displayName", name).put("size", file.length())
-                .put("metadata", new JSONObject().put("sourceUrl", source.getString("url")).put("title", source.getString("title"))).put("localUri", file.toURI().toString());
+                .put("metadata", downloadedMetadata).put("localUri", file.toURI().toString());
         }
     }
     private static class FakeUploader implements NativeDownloadRunner.Uploader {
@@ -91,5 +94,39 @@ public class NativeDownloadRunnerTest {
         runner.run(job.getString("id"), false); assertEquals(2, uploader.calls);
         uploader.remote.remove("111:iP6XpLQM2Cs.mp3"); runner.run(job.getString("id"), true);
         assertEquals(3, uploader.calls); assertEquals(2, engine.calls); assertEquals("complete", job.getJSONObject("cloud").getString("state"));
+    }
+    @Test public void replacingAgeRestrictedTwelfthSourceOnlyDownloadsMissingSongAndKeepsElevenMp3s() throws Exception {
+        NativeDownloadStore store = new NativeDownloadStore(temporary.newFolder()); JSONObject job = job(store, false);
+        JSONArray sources = new JSONArray();
+        for (int i = 0; i < 11; i++) sources.put(new JSONObject().put("url", "https://www.youtube.com/watch?v=" + String.format(java.util.Locale.ROOT, "abcdefgh%03d", i))
+            .put("title", "Song " + i).put("artist", "Artist " + i));
+        String originalUrl = "https://www.youtube.com/watch?v=yTLuE57Gvsc", replacementUrl = "https://www.youtube.com/watch?v=Zyxwvutsr01";
+        sources.put(new JSONObject().put("url", originalUrl).put("title", "FUK ARI !").put("artist", "FrostBorne")
+            .put("album", "Original album").put("coverUrl", "https://i.scdn.co/image/original").put("duration", 123));
+        job.put("sources", sources).put("total", 12); store.persist(job);
+        FakeEngine engine = new FakeEngine(); engine.fail.add("FUK ARI !"); engine.failureMessage = "ERROR: Sign in to confirm your age";
+        FakeUploader uploader = new FakeUploader(); NativeDownloadRunner runner = new NativeDownloadRunner(store, engine, uploader, value -> {});
+        runner.run(job.getString("id"), false);
+        assertEquals("partial", job.getString("state")); assertEquals(11, job.getJSONArray("files").length()); assertEquals(12, engine.calls);
+        JSONArray originalFiles = new JSONArray(job.getJSONArray("files").toString()); String originalCloud = job.getJSONObject("cloud").toString();
+        try { NativeDownloadRetryPolicy.prepare(job, new JSONObject()); fail("age-restricted source must not be retried blindly"); }
+        catch (IOException expected) { assertTrue(expected.getMessage().contains("年龄验证")); }
+        assertEquals(12, engine.calls);
+        JSONObject plan = NativeDownloadRetryPolicy.prepare(job, new JSONObject().put("replacements", new JSONArray()
+            .put(new JSONObject().put("fromUrl", originalUrl).put("url", replacementUrl))));
+        job.put("sources", plan.getJSONArray("sources")).put("failures", plan.getJSONArray("failures"));
+        engine.fail.clear(); runner.run(job.getString("id"), false);
+        assertEquals("complete", job.getString("state")); assertEquals(12, job.getInt("total")); assertEquals(12, job.getInt("completed"));
+        assertEquals(13, engine.calls); assertEquals(replacementUrl, engine.requestedUrls.get(12));
+        assertEquals(1, java.util.Collections.frequency(engine.requestedUrls, originalUrl));
+        for (int i = 0; i < 11; i++) {
+            assertEquals(originalFiles.getJSONObject(i).toString(), job.getJSONArray("files").getJSONObject(i).toString());
+            assertEquals(256, store.file(job.getString("id"), originalFiles.getJSONObject(i).getString("name")).length());
+        }
+        JSONObject finalMetadata = job.getJSONArray("files").getJSONObject(11).getJSONObject("metadata");
+        assertEquals("FrostBorne", finalMetadata.getString("artist")); assertEquals("Original album", finalMetadata.getString("album"));
+        assertEquals("https://i.scdn.co/image/original", finalMetadata.getString("coverUrl")); assertEquals(replacementUrl, finalMetadata.getString("sourceUrl"));
+        assertEquals(originalCloud, job.getJSONObject("cloud").toString()); assertEquals(0, uploader.calls);
+        assertEquals(0, job.getJSONArray("failures").length());
     }
 }

@@ -1,4 +1,8 @@
+const { desktopCacheArtwork } = require('./desktop-cache-source');
+
 function artworkSource(song, origin = '') {
+  const cached = desktopCacheArtwork(song);
+  if (cached) return cached;
   try {
     const url = new URL(song?.coverUrl);
     if (url.protocol === 'https:') return url.href;
