@@ -170,6 +170,62 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
         for (int i = 0; i < tracks.length() && i < limit; i++) visible.put(tracks.get(i));
         return new JSONObject().put("provider", "youtube").put("query", query).put("page", page).put("hasMore", page < 5 && tracks.length() > limit).put("entries", visible);
     }
+    @Override public JSONObject catalog(JSONObject value) throws Exception {
+        JSONObject options = NativeMusicCatalog.options(value);
+        if ("spotify".equals(options.getString("provider"))) {
+            String html = new String(fetch(options.getString("requestUrl"), NativeDownloadPolicy.MAX_JSON_BYTES), StandardCharsets.UTF_8);
+            JSONObject payload = new JSONObject().put("html", html);
+            if ("new".equals(options.getString("kind"))) {
+                JSONArray tracks = spotifyEntity(html).optJSONArray("trackList");
+                List<JSONObject> details = Collections.synchronizedList(new ArrayList<>());
+                java.util.concurrent.ExecutorService metadata = Executors.newFixedThreadPool(4);
+                List<java.util.concurrent.Future<?>> pending = new ArrayList<>();
+                int start = (options.getInt("page") - 1) * options.getInt("limit");
+                try {
+                    if (tracks != null) for (int i = start; i < Math.min(tracks.length(), start + options.getInt("limit")); i++) {
+                        JSONObject track = tracks.optJSONObject(i);
+                        String uri = track == null ? "" : track.optString("uri");
+                        if (!uri.matches("spotify:track:[A-Za-z0-9]{22}")) continue;
+                        pending.add(metadata.submit(() -> {
+                            try {
+                                String page = new String(fetch("https://open.spotify.com/embed/track/" + uri.substring(14), NativeDownloadPolicy.MAX_JSON_BYTES), StandardCharsets.UTF_8);
+                                details.add(new JSONObject().put("uri", uri).put("html", page));
+                            } catch (Exception ignored) { /* Keep the new release even if individual artwork is unavailable. */ }
+                        }));
+                    }
+                    for (java.util.concurrent.Future<?> task : pending) task.get();
+                } finally { metadata.shutdownNow(); }
+                payload.put("trackDetails", new JSONArray(details));
+            }
+            return payload;
+        }
+        int page = options.getInt("page"), limit = options.getInt("limit");
+        boolean album = "album".equals(options.getString("kind"));
+        JSONObject result = data(request(options.getString("requestUrl")).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download")
+            .addOption("--extractor-args", "youtubetab:approximate_date")
+            .addOption("--playlist-start", String.valueOf(album ? 1 : (page - 1) * limit + 1))
+            .addOption("--playlist-end", String.valueOf(album ? 100 : page * limit + 1)));
+        if ("albums".equals(options.getString("kind"))) {
+            JSONArray rows = result.optJSONArray("entries");
+            java.util.concurrent.ExecutorService cards = Executors.newFixedThreadPool(4);
+            List<java.util.concurrent.Future<?>> pending = new ArrayList<>();
+            try {
+                if (rows != null) for (int i = 0; i < Math.min(rows.length(), limit); i++) {
+                    final JSONObject row = rows.optJSONObject(i);
+                    if (row == null) continue;
+                    pending.add(cards.submit(() -> {
+                        try {
+                            JSONObject source = NativeMusicCatalog.options(new JSONObject().put("provider", "youtube").put("kind", "album").put("url", row.optString("url")));
+                            JSONObject details = new JSONObject(execute(request(source.getString("requestUrl")).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download").addOption("--playlist-end", "1"), "album-card-" + UUID.randomUUID(), 30000, null));
+                            row.put("catalogDetails", details);
+                        } catch (Exception ignored) { /* Keep a retriable platform link when a card cannot be loaded. */ }
+                    }));
+                }
+                for (java.util.concurrent.Future<?> task : pending) task.get();
+            } finally { cards.shutdownNow(); }
+        }
+        return new JSONObject().put("data", result);
+    }
     @Override public JSONObject match(JSONObject value) throws Exception {
         String query = NativeDownloadPolicy.text(value.opt("search"), 301);
         if (query.isEmpty() || query.length() > 300) throw new IOException("无效的歌曲搜索。");

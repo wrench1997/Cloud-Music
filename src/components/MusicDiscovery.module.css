@@ -98,7 +98,7 @@
   .preview { padding: 10px; }
 }
 
-.discoveryTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 22px 0; padding: 6px; border: 1px solid #eedfe7; border-radius: 22px; background: #faf3f6; }
+.discoveryTabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 22px 0; padding: 6px; border: 1px solid #eedfe7; border-radius: 22px; background: #faf3f6; }
 .discoveryTabs button { min-width: 0; min-height: 48px; padding: 12px 16px; border: 0; border-radius: 16px; background: transparent; color: #826977; font: inherit; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; transition: background .18s, color .18s, box-shadow .18s; }
 .discoveryTabs button:hover { background: #fff8fb; color: #9b3f66; }
 .discoveryTabs button[aria-pressed='true'] { color: #ad3f67; background: #fff; box-shadow: 0 3px 12px #a15b7614; }
@@ -159,7 +159,7 @@
 @media (max-width: 760px) {
   .hero { border-radius: 25px; }
   .hero > button { min-height: 54px; font-size: 15px; font-weight: 600; }
-  .discoveryTabs { gap: 4px; margin: 18px 0; padding: 5px; border-radius: 20px; }
+  .discoveryTabs { grid-template-columns:repeat(2,minmax(0,1fr)); gap: 4px; margin: 18px 0; padding: 5px; border-radius: 20px; }
   .discoveryTabs button { min-height: 48px; padding: 10px 6px; font-size: 12px; line-height: 1.5; border-radius: 15px; }
   .radioStart { flex-wrap: wrap; gap: 12px; margin-top: 20px; }
   .radioStart label { flex-basis: 100%; }

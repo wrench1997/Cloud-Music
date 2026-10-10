@@ -1,8 +1,10 @@
 const { nativeCloudConfig } = require('./download-job-state');
+const { catalogResult } = require('./music-catalog');
 
 async function nativeDownloadRequest(plugin, route, data, method) {
   const result = await plugin.request({ route, method: method || (data ? 'POST' : 'GET'), ...(data ? { data } : {}) });
   if (result?.error && !result.id && !Array.isArray(result.jobs)) throw new Error(result.error);
+  if (route === '/catalog') return catalogResult(data, result);
   return route === '/match' ? result.entries || result.candidates || [] : result;
 }
 
