@@ -84,6 +84,7 @@ final class NativeDownloadsManager {
         if ("POST".equals(method)) {
             if ("/inspect".equals(route)) return engine.inspect(data.optString("url", ""));
             if ("/search".equals(route)) return engine.search(data);
+            if ("/catalog".equals(route)) return engine.catalog(data);
             if ("/radio".equals(route)) return engine.radio(data);
             if ("/match".equals(route)) return engine.match(data);
             if ("/jobs".equals(route)) return create(data);

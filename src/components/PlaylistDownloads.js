@@ -8,8 +8,9 @@ import MusicDiscovery from './MusicDiscovery';
 import { downloadFailureReason, canonicalYoutubeSource, completedSourceUrls, replacementSearch } from '../lib/download-failure-policy';
 import styles from './PlaylistDownloads.module.css';
 
-export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUpload, onRepairUpload, onGoogleLogin, uploadAccount = '', uploadEmail = '', onPlayOriginal, onPlayDownloaded, onLibraryChanged, sourceRadio, active: viewActive = true, discoveryMode = false, taste, playlists, onShowDownloads, onShowPlaylist }) {
+export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUpload, onRepairUpload, onGoogleLogin, uploadAccount = '', uploadEmail = '', onPlayOriginal, onPlayDownloaded, onLibraryChanged, sourceRadio, sourceCatalog, active: viewActive = true, discoveryMode = false, taste, playlists, onShowDownloads, onShowPlaylist }) {
   const [connection, setConnection] = useState(null);
+  const [catalogConnection, setCatalogConnection] = useState(null);
   const [entries, setEntries] = useState([]);
   const [selected, setSelected] = useState({});
   const [candidates, setCandidates] = useState({});
@@ -55,7 +56,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     if (config.native) return requestNativeDownload(route, data, method);
     const response = await fetch(`${config.url}${route}`, {
       method: method || (data ? 'POST' : 'GET'), headers: { Authorization: `Bearer ${config.token}`, ...(data ? { 'Content-Type': 'application/json' } : {}) },
-      ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(['/inspect', '/match', '/search', '/radio'].includes(route) ? 180000 : 30000),
+      ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(['/inspect', '/match', '/search', '/radio', '/catalog'].includes(route) ? 180000 : 30000),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `请求失败 ${response.status}`);
@@ -71,6 +72,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   };
   const selectJob = (value) => { const next = normalizeDownloadJob(value); if (!next) return; receiveJobs([next], next.id); setTransfer(''); };
   const connect = async (config) => {
+    setCatalogConnection(config);
     const status = await request(config, '/status');
     if (!status.ready) throw new Error(status.error || (config.native ? '下载功能暂时未能准备好，请重试。' : '下载组件尚未准备好，请联系应用管理员安装下载组件。'));
     setConnection(config);
@@ -354,7 +356,8 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   });
 
   return <section className="download-panel" aria-label="下载 MP3 并上传云端">
-    <div hidden={!discoveryMode}><MusicDiscovery taste={taste} playlists={playlists} incomingRadio={sourceRadio} viewActive={viewActive && discoveryMode} available={Boolean(connection)} canDownload={Boolean(connection) && !busy && (connection.native || !runningJob)} onSearch={(value) => request(connection, '/search', value)} onRadio={(value) => request(connection, '/radio', value)} onMatchTrack={(track) => request(connection, '/match', track)} onInspectSpotify={(url) => request(connection, '/inspect', { url })} onDownload={downloadDiscovered} onChooseSpotifyTrack={chooseSpotifyDiscovery} /></div>
+    <div hidden={!discoveryMode}><MusicDiscovery taste={taste} playlists={playlists} incomingRadio={sourceRadio} incomingCatalog={sourceCatalog} viewActive={viewActive && discoveryMode} available={Boolean(connection)} catalogAvailable={Boolean(catalogConnection)} canDownload={Boolean(connection) && !busy && (connection.native || !runningJob)} onCatalog={(value) => request(catalogConnection, '/catalog', value)} onSearch={(value) => request(connection, '/search', value)} onRadio={(value) => request(connection, '/radio', value)} onMatchTrack={(track) => request(connection, '/match', track)} onInspectSpotify={(url) => request(connection, '/inspect', { url })} onDownload={downloadDiscovered} onChooseSpotifyTrack={chooseSpotifyDiscovery} /></div>
+    <div hidden={discoveryMode && catalogConnection && !jobs.length && !entries.length}>
     <h2>{discoveryMode ? '下载与保存' : '下载 MP3 · 云端保存'}</h2>
     {!discoveryMode && !playlist && !discoveredEntries && <p>先在上方粘贴歌单链接并导入，或从“我的歌单”选择一个歌单，也可以在“发现音乐”搜索歌曲。</p>}
     {!discoveryMode && !discoveredEntries && playlist?.provider === 'spotify' && <div className="download-actions" role="group" aria-label="Spotify 原平台播放">
@@ -431,5 +434,6 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       </div>}
     </>}
     {notice && <p role="status">{notice}</p>}{transfer && <p role="status">{transfer}</p>}{error && <p className="login-error" role="alert">{error}</p>}
+    </div>
   </section>;
 }

@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './SongContextMenu.module.css';
 
-export default function SongContextMenu({ context, favorite, canTrash, onClose, onPlay, onFavorite, onSave, onTrash, onCacheSong, onRemoveCacheSong }) {
+export default function SongContextMenu({ context, favorite, canTrash, onClose, onPlay, onViewArtist, onViewAlbum, onFavorite, onSave, onTrash, onCacheSong, onRemoveCacheSong }) {
   const menuRef = useRef(null);
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -32,6 +32,8 @@ export default function SongContextMenu({ context, favorite, canTrash, onClose, 
     <section ref={menuRef} role="menu" aria-label={`${context.song.title || '歌曲'}的操作`} className={styles.menu} style={{ left: context.x, top: context.y, visibility: 'hidden' }} onKeyDown={keyDown}>
       <header><b>{context.song.title || '未知歌曲'}</b><small>{context.song.artist || '未知歌手'}</small></header>
       <button role="menuitem" onClick={onPlay}>播放这首歌</button>
+      {onViewArtist && <button role="menuitem" onClick={onViewArtist}>查看歌手与新作品</button>}
+      {onViewAlbum && <button role="menuitem" onClick={onViewAlbum}>查看专辑</button>}
       <button role="menuitem" onClick={onFavorite}>{favorite ? '取消收藏' : '收藏这首歌'}</button>
       <button role="menuitem" onClick={onSave}>另存歌曲文件</button>
       {onCacheSong && !context.song.localUri && <button role="menuitem" onClick={() => onCacheSong(context.song)}>保存到本机曲库</button>}

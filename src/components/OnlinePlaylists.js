@@ -3,7 +3,7 @@ import { STORAGE_KEY, MAX_PLAYLISTS, parsePlaylistLink, normalizePlaylists } fro
 import PlaylistDownloads from './PlaylistDownloads';
 import styles from './PlaylistWorkspace.module.css';
 
-export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onGoogleLogin, onPlayDownloaded, onLibraryChanged, uploadAccount, uploadEmail, taste, initialMode = 'download', mode: controlledMode, active = true, onModeChange, sourceRadio }) {
+export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onGoogleLogin, onPlayDownloaded, onLibraryChanged, uploadAccount, uploadEmail, taste, initialMode = 'download', mode: controlledMode, active = true, onModeChange, sourceRadio, sourceCatalog }) {
   const [playlists, setPlaylists] = useState([]);
   const [selected, setSelected] = useState(null);
   const [link, setLink] = useState('');
@@ -62,7 +62,7 @@ export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onG
   };
   return <main className="online-page" hidden={!active}>
     <header className="online-header"><div><span className="eyebrow">YUNGAN MUSIC</span><h1>{mode === 'discover' ? '发现音乐' : mode === 'playback' ? '原平台试听' : '下载与保存'}</h1></div><button className="outline-button" onClick={mode === 'playback' ? () => changeMode('download') : onClose}>{mode === 'playback' ? '返回下载' : '返回曲库'}</button></header>
-    <p className="online-intro">{mode === 'discover' ? '从喜欢的歌出发，试听新的音乐，选好后直接下载。' : mode === 'playback' ? '使用平台播放器核对歌曲版本。' : '导入歌单、下载 MP3，保存到本机并同步至云端。'}</p>
+    <p className="online-intro">{mode === 'discover' ? '查看其他歌手的新歌与专辑，试听后选择音源下载。' : mode === 'playback' ? '使用平台播放器核对歌曲版本。' : '导入歌单、下载 MP3，保存到本机并同步至云端。'}</p>
     {mode === 'download' && <section className={styles.importCard} aria-label="导入歌单">
     <div className={styles.importHeading}><span aria-hidden="true">↓</span><div><h2>导入歌单</h2><p>支持 Spotify 与 YouTube Music 分享链接</p></div></div>
     <form className="online-form" onSubmit={add}>
@@ -83,7 +83,7 @@ export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onG
       <div className={styles.content}>
       <div className={styles.downloadArea} hidden={mode === 'playback'}>
         {mode === 'download' && selected && !downloadFromDiscovery && <div className={styles.selectedPlaylist}><span className={`provider-dot ${selected.provider}`} /><div><b>{selected.name}</b><small>{selected.provider === 'spotify' ? 'Spotify 歌单' : 'YouTube Music 歌单'}</small></div><button className={styles.originalButton} onClick={() => changeMode('playback')}>原平台试听 ↗</button></div>}
-        <PlaylistDownloads playlist={selected} playlistRevision={selectionRevision} onUpload={onUpload} onRepairUpload={onRepairUpload} onGoogleLogin={onGoogleLogin} onPlayDownloaded={onPlayDownloaded} onLibraryChanged={onLibraryChanged} uploadAccount={uploadAccount} uploadEmail={uploadEmail} onPlayOriginal={() => changeMode('playback')} discoveryMode={mode === 'discover'} active={active} taste={taste} playlists={playlists} sourceRadio={sourceRadio} onShowDownloads={() => { setDownloadFromDiscovery(true); changeMode('download'); }} onShowPlaylist={() => setDownloadFromDiscovery(false)} />
+        <PlaylistDownloads playlist={selected} playlistRevision={selectionRevision} onUpload={onUpload} onRepairUpload={onRepairUpload} onGoogleLogin={onGoogleLogin} onPlayDownloaded={onPlayDownloaded} onLibraryChanged={onLibraryChanged} uploadAccount={uploadAccount} uploadEmail={uploadEmail} onPlayOriginal={() => changeMode('playback')} discoveryMode={mode === 'discover'} active={active} taste={taste} playlists={playlists} sourceRadio={sourceRadio} sourceCatalog={sourceCatalog} onShowDownloads={() => { setDownloadFromDiscovery(true); changeMode('download'); }} onShowPlaylist={() => setDownloadFromDiscovery(false)} />
       </div>
       <section className="online-player" aria-label="平台歌单播放器" hidden={mode !== 'playback'}>{mode === 'playback' && active && selected ? <>
         <header><div><h2>{selected.name}</h2><small>{selected.provider === 'spotify' ? '播放来源：Spotify 原平台' : 'YouTube Music · YouTube 播放器'}</small></div><button onClick={() => { setLoaded(false); setRetry((value) => value + 1); }}>重新加载</button></header>

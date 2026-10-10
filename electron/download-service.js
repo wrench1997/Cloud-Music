@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const os = require('node:os');
 const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
 const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls } = require('../src/lib/download-failure-policy');
+const { catalogOptions, catalogResult } = require('../src/lib/music-catalog');
 
 function searchOptions(value = {}) {
   if (typeof value.query !== 'string' || value.query.length > 300) throw new Error('请输入 1 至 300 个字符的歌曲或歌手名称。');
@@ -81,6 +82,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   const jobs = new Map();
   const children = new Set();
   const radioPages = new Map();
+  const catalogPages = new Map();
   let server;
   let mobileServer;
   let mobileStarting;
@@ -130,8 +132,8 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     } catch { /* An incomplete manifest must not prevent startup. */ }
   }
 
-  function toolArgs() {
-    if (!fs.existsSync(executable) || !fs.existsSync(ffmpeg)) throw new Error('下载工具未安装，请先运行 npm run media:install。');
+  function toolArgs(audioRequired = true) {
+    if (!fs.existsSync(executable) || (audioRequired && !fs.existsSync(ffmpeg))) throw new Error('下载工具未安装，请先运行 npm run media:install。');
     const runtime = fs.existsSync(nodeRuntime) ? nodeRuntime : process.execPath;
     return ['--ignore-config', '--no-warnings', '--socket-timeout', '30', '--retries', '2', '--js-runtimes', `node:${runtime}`, '--remote-components', 'ejs:github'];
   }
@@ -139,7 +141,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     if (disposed) return Promise.reject(new Error('下载服务已关闭。'));
     return new Promise((resolve, reject) => {
       let child;
-      try { child = spawnProcess(executable, [...toolArgs(), ...args], { windowsHide: true, shell: false }); }
+      try { child = spawnProcess(executable, [...toolArgs(!args.includes('--skip-download')), ...args], { windowsHide: true, shell: false }); }
       catch (error) { reject(error); return; }
       children.add(child);
       let output = ''; let errors = ''; let pending = '';
@@ -184,6 +186,55 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-start', String(start), '--playlist-end', String(end), '--', `ytsearch${end}:${query}`]));
     const entries = discoveryEntries(data.entries);
     return { provider: 'youtube', query, page, hasMore: page < 5 && entries.length > limit, entries: entries.slice(0, limit), notice: '搜索和音源来自 YouTube。下载时读取实际歌曲信息并嵌入 MP3。' };
+  }
+  async function catalog(value) {
+    const options = catalogOptions(value);
+    if (disposed) throw new Error('下载服务已关闭。');
+    const key = `${options.requestUrl}:${options.page}`;
+    const cached = catalogPages.get(key);
+    if (cached?.expires > Date.now()) return cached.promise;
+    const promise = (async () => {
+      if (options.provider === 'spotify') {
+        const response = await fetchImpl(options.requestUrl, { signal: AbortSignal.timeout(30000), redirect: 'error' });
+        if (!response.ok) throw new Error(`Spotify 返回 ${response.status}，请重试或在原平台打开。`);
+        const payload = { html: await response.text(), trackDetails: [] };
+        const result = catalogResult(value, payload);
+        if (options.kind === 'new') {
+          for (let index = 0; index < result.entries.length; index += 4) {
+            await Promise.all(result.entries.slice(index, index + 4).map(async (track) => {
+              try {
+                const response = await fetchImpl(`https://open.spotify.com/embed/track/${track.spotifyId}`, { signal: AbortSignal.timeout(10000), redirect: 'error' });
+                if (response.ok) payload.trackDetails.push({ uri: `spotify:track:${track.spotifyId}`, html: await response.text() });
+              } catch { /* Keep the playlist entry when individual metadata is unavailable. */ }
+            }));
+          }
+          return catalogResult(value, payload);
+        }
+        return result;
+      }
+      const start = options.kind === 'album' ? 1 : (options.page - 1) * options.limit + 1;
+      const end = options.kind === 'album' ? 100 : options.page * options.limit + 1;
+      const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--extractor-args', 'youtubetab:approximate_date', '--playlist-start', String(start), '--playlist-end', String(end), '--', options.requestUrl]));
+      if (options.kind === 'albums') {
+        const rows = (data.entries || []).slice(0, options.limit + 1);
+        // Music album search returns navigation URLs only. Read one track per card,
+        // in batches of four, to obtain the real album name without crawling albums.
+        for (let index = 0; index < Math.min(rows.length, options.limit); index += 4) {
+          await Promise.all(rows.slice(index, Math.min(index + 4, options.limit)).map(async (row) => {
+            try {
+              const album = catalogOptions({ provider: 'youtube', kind: 'album', url: row.url });
+              row.catalogDetails = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '1', '--', album.requestUrl], undefined, 30000));
+            } catch { /* The card still opens its validated platform link for retry. */ }
+          }));
+        }
+        data.entries = rows;
+      }
+      return catalogResult(value, { data });
+    })();
+    catalogPages.set(key, { expires: Date.now() + 300000, promise });
+    while (catalogPages.size > 40) catalogPages.delete(catalogPages.keys().next().value);
+    try { return await promise; }
+    catch (error) { catalogPages.delete(key); throw error; }
   }
   async function radio(value) {
     const options = radioOptions(value);
@@ -367,6 +418,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       if (request.method === 'POST' && url.pathname === '/inspect') { reply(response, 200, await inspect((await readJson(request)).url)); return; }
       if (request.method === 'POST' && url.pathname === '/match') { reply(response, 200, await match(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/search') { reply(response, 200, await search(await readJson(request))); return; }
+      if (request.method === 'POST' && url.pathname === '/catalog') { reply(response, 200, await catalog(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/radio') { reply(response, 200, await radio(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/jobs') { reply(response, 200, startJob((await readJson(request)).entries)); return; }
       const jobRoute = url.pathname.match(/^\/jobs\/([\w-]+)$/);
@@ -427,13 +479,13 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     const addresses = port ? Object.values(os.networkInterfaces()).flat().filter((entry) => entry?.family === 'IPv4' && !entry.internal).map((entry) => `http://${entry.address}:${port}#${token}`) : [];
     return { url: baseUrl, token, pairingLinks: addresses, outputDir };
   }
-  function dispose() { disposed = true; radioPages.clear(); for (const child of children) child.kill(); server?.closeAllConnections(); server?.close(); mobileServer?.closeAllConnections(); mobileServer?.close(); }
+  function dispose() { disposed = true; radioPages.clear(); catalogPages.clear(); for (const child of children) child.kill(); server?.closeAllConnections(); server?.close(); mobileServer?.closeAllConnections(); mobileServer?.close(); }
   function handleLocal(request, response) {
     request.headers.authorization = `Bearer ${token}`;
     delete request.headers.origin;
     return handle(request, response);
   }
-  return { connect, inspect, match, search, radio, startJob, repairJob, dispose, handleLocal };
+  return { connect, inspect, match, search, catalog, radio, startJob, repairJob, dispose, handleLocal };
 }
 
 module.exports = { createDownloadService, parseSource, parseSpotifyMetadata, searchOptions, radioOptions };

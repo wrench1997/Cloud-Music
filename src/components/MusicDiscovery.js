@@ -3,9 +3,10 @@ import Image from 'next/image';
 import { discoveryMoods, formatDiscoveryDuration, platformSearchLink, radioSeeds, rankDiscoveryResults, recommendationSeeds, spotifyCharts, youtubeRadioLink, youtubeVideoId } from '../lib/music-discovery';
 import { parsePlaylistLink } from '../lib/online-playlists';
 import styles from './MusicDiscovery.module.css';
+import NewMusicExplorer from './NewMusicExplorer';
 
-export default function MusicDiscovery({ taste = {}, playlists = [], available, canDownload, onSearch, onRadio, onMatchTrack, onInspectSpotify, onDownload, onChooseSpotifyTrack, incomingRadio, viewActive = true }) {
-  const [view, setView] = useState('radio');
+export default function MusicDiscovery({ taste = {}, playlists = [], available, catalogAvailable, canDownload, onCatalog, onSearch, onRadio, onMatchTrack, onInspectSpotify, onDownload, onChooseSpotifyTrack, incomingRadio, incomingCatalog, viewActive = true }) {
+  const [view, setView] = useState('new');
   const [query, setQuery] = useState('');
   const [radioLink, setRadioLink] = useState('');
   const [results, setResults] = useState([]);
@@ -28,6 +29,7 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
   const resultsPanel = useRef(null);
   const alive = useRef(true);
   const startedIncomingRadio = useRef('');
+  useEffect(() => { if (incomingCatalog) Promise.resolve().then(() => setView('new')); }, [incomingCatalog]);
   useEffect(() => { const sequence = requestSequence; alive.current = true; return () => { alive.current = false; sequence.current++; }; }, []);
   useEffect(() => { if (spotifyCandidates) { candidatePanel.current?.scrollIntoView({ block: 'nearest' }); candidatePanel.current?.focus({ preventScroll: true }); } }, [spotifyCandidates]);
   useEffect(() => { if (preview) previewPanel.current?.scrollIntoView({ block: 'nearest' }); }, [preview]);
@@ -111,9 +113,10 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
   const changePage = (next) => context.type === 'radio' ? startRadio(context.seed, next, context.radioId) : search(context.query, context.seed, next);
 
   return <section className={styles.discovery} aria-label="发现音乐">
-    <div className={styles.hero}><span className={styles.sparkle} aria-hidden="true">✦</span><div><span className={styles.eyebrow}>听见喜欢的歌，再向外探索</span><h2>下一首，会喜欢什么？</h2><p>从歌曲电台发现相似音乐，或听听 Spotify 榜单正在流行什么。</p></div><button className="red-button" disabled={!available || busy || !stations.length} onClick={nextStation}>{busy ? '正在找歌…' : context?.type === 'radio' ? stations.length > 1 ? '换一首开启电台' : '刷新这个电台' : '开启我的歌曲电台'}</button></div>
-    <div className={styles.discoveryTabs} role="group" aria-label="发现方式"><button aria-pressed={view === 'radio'} disabled={busy} onClick={() => changeView('radio')}>歌曲电台</button><button aria-pressed={view === 'charts'} disabled={busy} onClick={() => changeView('charts')}>Spotify 榜单</button><button aria-pressed={view === 'manual'} disabled={busy} onClick={() => changeView('manual')}>手动找歌</button></div>
-    {!available && <p className={styles.connectionHint} role="status">正在准备找歌功能，准备好后即可试听、下载与收藏新的音乐。</p>}
+    {view !== 'new' && <div className={styles.hero}><span className={styles.sparkle} aria-hidden="true">✦</span><div><span className={styles.eyebrow}>听见喜欢的歌，再向外探索</span><h2>下一首，会喜欢什么？</h2><p>发现其他歌手的新歌与专辑，也可以从喜欢的歌继续开启电台。</p></div><button className="red-button" disabled={!available || busy || !stations.length} onClick={nextStation}>{busy ? '正在找歌…' : context?.type === 'radio' ? stations.length > 1 ? '换一首开启电台' : '刷新这个电台' : '开启我的歌曲电台'}</button></div>}
+    <div className={styles.discoveryTabs} role="group" aria-label="发现方式"><button aria-pressed={view === 'new'} disabled={busy} onClick={() => changeView('new')}>新歌 · 歌手 · 专辑</button><button aria-pressed={view === 'radio'} disabled={busy} onClick={() => changeView('radio')}>歌曲电台</button><button aria-pressed={view === 'charts'} disabled={busy} onClick={() => changeView('charts')}>Spotify 榜单</button><button aria-pressed={view === 'manual'} disabled={busy} onClick={() => changeView('manual')}>手动找歌</button></div>
+    <div hidden={view !== 'new'}><NewMusicExplorer available={catalogAvailable} canDownload={canDownload} active={viewActive && view === 'new'} onCatalog={onCatalog} onDownload={onDownload} onChooseSpotifyTrack={onChooseSpotifyTrack} incoming={incomingCatalog} /></div>
+    {!available && view !== 'new' && <p className={styles.connectionHint} role="status">正在准备找歌功能，准备好后即可试听、下载与收藏新的音乐。</p>}
     {view === 'radio' && <>
       <div className={styles.seedHeader}><h3>选择电台起点</h3><span>从当前歌曲、最近播放和收藏中选一首</span></div>
       {stations.length ? <div className={styles.radioSeeds}>{stations.map((station) => <button key={station.videoId} disabled={!available || busy} aria-pressed={context?.type === 'radio' && context.seed.videoId === station.videoId} onClick={() => startRadio(station)}><span className={styles.cover}>{station.coverUrl ? <Image src={station.coverUrl} width={70} height={70} unoptimized alt="" referrerPolicy="no-referrer" /> : '♫'}</span><span><b>{station.title}</b><small>{station.artist || 'YouTube 音源'}</small><small>{station.reason} · 开启电台</small></span></button>)}</div> : <div className={styles.emptyStart}><span aria-hidden="true">♫</span><div><b>先挑一首喜欢的歌</b><p>从 Spotify 榜单挑歌，或用歌名搜索，就能找到电台起点。</p></div><button className="outline-button" onClick={() => changeView('charts')}>看看 Spotify 榜单</button></div>}
@@ -152,6 +155,6 @@ export default function MusicDiscovery({ taste = {}, playlists = [], available, 
       </article>)}
       <div className={styles.downloadBar}><span>已选 {selectedTracks.length} 首</span><button className="red-button" disabled={!selectedTracks.length || busy || !canDownload} onClick={() => download(selectedTracks)}>下载所选 MP3</button></div><div className={styles.pagination}><button className="outline-button" disabled={page <= 1 || busy} onClick={() => changePage(page - 1)}>上一页</button><span>第 {page} 页</span><button className="outline-button" disabled={!hasMore || busy} onClick={() => changePage(page + 1)}>下一页</button></div>
     </div>}
-    <p className={styles.privacy}>电台曲目来自 YouTube 推荐，榜单曲目来自 Spotify。只向平台发送所选歌曲或关键词，不读取你的平台账号历史。</p>
+    <p className={styles.privacy}>新歌与发行信息来自平台公开页面。只向平台发送所选歌曲或关键词，不读取你的平台账号历史。</p>
   </section>;
 }
