@@ -205,11 +205,13 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
         }
         int page = options.getInt("page"), limit = options.getInt("limit");
         boolean album = "album".equals(options.getString("kind"));
-        JSONObject result = data(request(options.getString("requestUrl")).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download")
+        NativeMusicCatalog.CatalogReader read = url -> data(request(url).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download")
             .addOption("--extractor-args", "youtubetab:approximate_date")
             .addOption("--playlist-start", String.valueOf(album ? 1 : (page - 1) * limit + 1))
             .addOption("--playlist-end", String.valueOf(album ? 100 : page * limit + 1)));
-        if ("albums".equals(options.getString("kind"))) {
+        JSONObject result = "artist".equals(options.getString("kind")) ? NativeMusicCatalog.readArtistCatalog(options, read) : read.read(options.getString("requestUrl"));
+        boolean artists = "artists".equals(options.getString("kind"));
+        if (artists || "albums".equals(options.getString("kind")) || ("artist".equals(options.getString("kind")) && "releases".equals(result.optString("catalogSource")))) {
             JSONArray rows = result.optJSONArray("entries");
             java.util.concurrent.ExecutorService cards = Executors.newFixedThreadPool(4);
             List<java.util.concurrent.Future<?>> pending = new ArrayList<>();
@@ -219,8 +221,9 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
                     if (row == null) continue;
                     pending.add(cards.submit(() -> {
                         try {
-                            JSONObject source = NativeMusicCatalog.options(new JSONObject().put("provider", "youtube").put("kind", "album").put("url", row.optString("url")));
-                            JSONObject details = new JSONObject(execute(request(source.getString("requestUrl")).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download").addOption("--playlist-end", "1"), "album-card-" + UUID.randomUUID(), 30000, null));
+                            JSONObject source = NativeMusicCatalog.options(new JSONObject().put("provider", "youtube").put("kind", artists ? "artist" : "album").put("url", row.optString("url")));
+                            String url = artists ? source.getJSONArray("artistRequestUrls").getString(2) : source.getString("requestUrl");
+                            JSONObject details = new JSONObject(execute(request(url).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download").addOption("--playlist-end", "1"), "catalog-card-" + UUID.randomUUID(), 30000, null));
                             row.put("catalogDetails", details);
                         } catch (Exception ignored) { /* Keep a retriable platform link when a card cannot be loaded. */ }
                     }));
