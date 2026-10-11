@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const os = require('node:os');
 const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
 const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls, downloadFailureReason } = require('../src/lib/download-failure-policy');
-const { catalogOptions, catalogResult, readYoutubeArtistCatalog } = require('../src/lib/music-catalog');
+const { catalogOptions, catalogResult, readYoutubeArtistCatalog, readYoutubeArtistProfile } = require('../src/lib/music-catalog');
 
 function searchOptions(value = {}) {
   if (typeof value.query !== 'string' || value.query.length > 300) throw new Error('请输入 1 至 300 个字符的歌曲或歌手名称。');
@@ -224,13 +224,16 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       if (['artists', 'albums'].includes(options.kind) || (options.kind === 'artist' && data.catalogSource === 'releases')) {
         const rows = (data.entries || []).slice(0, options.limit + 1);
         // Music search and release tabs return navigation URLs without artwork or
-        // names. Read at most one entry per card, in batches of four.
+        // names. Read one entry per card, in batches of four; Topic profiles may
+        // need one more lookup for their explicitly credited artist channel.
+        const readProfile = async (url) => JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '1', '--', url], undefined, 30000));
         for (let index = 0; index < Math.min(rows.length, options.limit); index += 4) {
           await Promise.all(rows.slice(index, Math.min(index + 4, options.limit)).map(async (row) => {
             try {
               const source = catalogOptions({ provider: 'youtube', kind: options.kind === 'artists' ? 'artist' : 'album', url: row.url });
               const url = options.kind === 'artists' ? source.url : source.requestUrl;
-              row.catalogDetails = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '1', '--', url], undefined, 30000));
+              if (options.kind === 'artists') Object.assign(row, await readYoutubeArtistProfile(url, readProfile));
+              else row.catalogDetails = await readProfile(url);
             } catch { /* The card still opens its validated platform link for retry. */ }
           }));
         }

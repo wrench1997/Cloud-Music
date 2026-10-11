@@ -61,6 +61,35 @@ final class NativeMusicCatalog {
         return options;
     }
     interface CatalogReader { JSONObject read(String url) throws Exception; }
+    static JSONObject readArtistProfile(String url, CatalogReader reader) throws Exception {
+        String sourceUrl = artistProfileUrl(url);
+        JSONObject details = reader.read(sourceUrl);
+        JSONObject result = new JSONObject().put("catalogDetails", details);
+        // A Topic upload may explicitly credit its associated official channel.
+        // Keep the directory unless that exact channel is independently verified.
+        String sourceId = details.optString("channel_id");
+        if (!isTopic(details) || !("https://www.youtube.com/channel/" + sourceId).equals(sourceUrl)) return result;
+        JSONArray entries = details.optJSONArray("entries");
+        JSONObject track = entries == null ? null : entries.optJSONObject(0);
+        if (track == null || !track.optString("id").matches("[A-Za-z0-9_-]{11}") || !track.optString("channel_id").matches("UC[A-Za-z0-9_-]{22}")) return result;
+        try {
+            String artistUrl = artistProfileUrl(track.optString("channel_url"));
+            String artistId = track.getString("channel_id");
+            if (sourceId.equals(artistId) || !("https://www.youtube.com/channel/" + artistId).equals(artistUrl)) return result;
+            JSONObject profile = reader.read(artistUrl);
+            if (artistId.equals(profile.optString("channel_id")) && Boolean.TRUE.equals(profile.opt("channel_is_verified")))
+                result.put("catalogArtist", new JSONObject().put("url", artistUrl).put("details", profile));
+        } catch (Exception ignored) { /* The music directory remains available for retry. */ }
+        return result;
+    }
+    private static String artistProfileUrl(String url) throws Exception {
+        JSONObject source = options(new JSONObject().put("provider", "youtube").put("kind", "artist").put("url", url));
+        return source.getJSONArray("artistRequestUrls").getString(2);
+    }
+    private static boolean isTopic(JSONObject data) {
+        return Pattern.compile(" - Topic$", Pattern.CASE_INSENSITIVE).matcher(data.optString("title").trim()).find()
+            || Pattern.compile(" - Topic$", Pattern.CASE_INSENSITIVE).matcher(data.optString("channel").trim()).find();
+    }
     static JSONObject readArtistCatalog(JSONObject options, CatalogReader reader) throws Exception {
         JSONArray urls = options.getJSONArray("artistRequestUrls");
         String[] sources = {"releases", "videos", "channel"};

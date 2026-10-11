@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { catalogLink, catalogOptions, catalogResult, NEW_MUSIC_PLAYLIST, readYoutubeArtistCatalog } = require('../src/lib/music-catalog');
+const { catalogLink, catalogOptions, catalogResult, NEW_MUSIC_PLAYLIST, readYoutubeArtistCatalog, readYoutubeArtistProfile } = require('../src/lib/music-catalog');
 const { nativeDownloadRequest } = require('../src/lib/native-download-request');
 const { createDownloadService } = require('../electron/download-service');
 
@@ -104,6 +104,74 @@ test('music artist navigation results use fetched artist identities and identify
   assert.equal(result.items[0].verified, true);
   const shorts = catalogResult({ provider: 'youtube', kind: 'artist', url: `https://www.youtube.com/channel/${channelId}` }, { data: { channel: 'Yasumu', webpage_url: `https://www.youtube.com/channel/${channelId}/shorts`, entries: [{ id: 'abcdefghijk', title: '#kpop' }] } });
   assert.match(shorts.notice, /Shorts.*同名/);
+});
+
+const yasumuTopic = 'UCfZGCfvNELLPbRptzsZ4t6w';
+const yasumuOfficial = 'UCuY7e4kMpba1PRN8QAeTBRg';
+const topicProfile = (channel = yasumuOfficial) => ({
+  channel: 'Yasumu', channel_id: yasumuTopic, title: 'Uploads from Yasumu - Topic',
+  thumbnails: [{ url: 'https://i.ytimg.com/vi/Vz3-xvAQ2wg/hqdefault.jpg', width: 1280, height: 720 }],
+  entries: [{ id: 'Vz3-xvAQ2wg', channel_id: channel, channel_url: `https://www.youtube.com/channel/${channel}` }],
+});
+const officialProfile = () => ({
+  channel: 'Yasumu', channel_id: yasumuOfficial, channel_is_verified: true,
+  thumbnails: [
+    { id: 'banner_uncropped', url: 'https://yt3.googleusercontent.com/banner', preference: -5 },
+    { url: 'https://yt3.googleusercontent.com/wide-banner', width: 2560, height: 424, preference: -10 },
+    { id: 'avatar_uncropped', url: 'https://yt3.googleusercontent.com/artist-photo', preference: 1 },
+  ],
+});
+
+test('Topic search restores its explicitly linked verified artist and real portrait on both platforms', async () => {
+  const calls = [];
+  const profile = await readYoutubeArtistProfile(`https://music.youtube.com/browse/${yasumuTopic}`, async (url) => {
+    calls.push(url);
+    return url.endsWith(yasumuTopic) ? topicProfile() : officialProfile();
+  });
+  assert.deepEqual(calls, [yasumuTopic, yasumuOfficial].map((id) => `https://www.youtube.com/channel/${id}`));
+  const input = { provider: 'youtube', kind: 'artists', query: 'yasumu' };
+  const row = { url: `https://music.youtube.com/browse/${yasumuTopic}`, ...profile };
+  const payload = { data: { entries: [row, row, { url: `https://music.youtube.com/browse/${channelId}`, catalogDetails: { channel: 'Yasumu Lofi - Topic' } }] } };
+  const result = catalogResult(input, payload);
+  assert.equal(result.items.length, 2);
+  assert.equal(result.items[0].title, 'Yasumu');
+  assert.equal(result.items[0].url, `https://www.youtube.com/channel/${yasumuOfficial}`);
+  assert.equal(result.items[0].coverUrl, 'https://yt3.googleusercontent.com/artist-photo');
+  assert.equal(result.items[0].verified, true);
+  assert.equal(result.items[0].artistType, 'channel');
+  assert.equal(result.items[1].title, 'Yasumu Lofi - Topic');
+  assert.equal(result.items[1].artistType, 'topic');
+  assert.deepEqual(await nativeDownloadRequest({ request: async () => payload }, '/catalog', input), result);
+});
+
+test('artist identity lookup never infers identity from a same-name account or an unverified, mismatched or unavailable profile', async () => {
+  for (const variant of ['unverified', 'mismatched', 'unavailable', 'unsafe', 'ordinary', 'same-channel', 'mismatched-credit']) {
+    const directory = topicProfile(variant === 'same-channel' ? yasumuTopic : yasumuOfficial);
+    if (variant === 'ordinary') directory.title = 'Uploads from Yasumu';
+    if (variant === 'unsafe') directory.entries[0].channel_url = `https://evil.test/channel/${yasumuOfficial}`;
+    if (variant === 'mismatched-credit') directory.entries[0].channel_id = channelId;
+    let calls = 0;
+    const profile = await readYoutubeArtistProfile(`https://music.youtube.com/browse/${yasumuTopic}`, async () => {
+      if (++calls === 1) return directory;
+      if (variant === 'unavailable') throw new Error('network timeout');
+      return { ...officialProfile(), channel_is_verified: variant !== 'unverified', channel_id: variant === 'mismatched' ? channelId : yasumuOfficial };
+    });
+    assert.equal(profile.catalogArtist, undefined, variant);
+    assert.equal(calls, ['unsafe', 'ordinary', 'same-channel', 'mismatched-credit'].includes(variant) ? 1 : 2, variant);
+    const result = catalogResult({ provider: 'youtube', kind: 'artists', query: 'yasumu' }, { data: { entries: [{ url: `https://music.youtube.com/browse/${yasumuTopic}`, ...profile }] } });
+    assert.equal(result.items[0].id, yasumuTopic, variant);
+    assert.equal(result.items[0].coverUrl, '', variant); // A song cover is not an artist avatar.
+    assert.equal(result.items[0].verified, false, variant);
+  }
+});
+
+test('merged Topic and artist identities do not hide the next music search page', () => {
+  const row = { url: `https://music.youtube.com/browse/${yasumuTopic}`, catalogDetails: topicProfile(), catalogArtist: { url: `https://www.youtube.com/channel/${yasumuOfficial}`, details: officialProfile() } };
+  const payload = { data: { entries: Array.from({ length: 13 }, () => row) } };
+  const input = { provider: 'youtube', kind: 'artists', query: 'yasumu' };
+  assert.equal(catalogResult(input, payload).items.length, 1);
+  assert.equal(catalogResult(input, payload).hasMore, true);
+  assert.equal(catalogResult({ ...input, page: 5 }, payload).hasMore, false);
 });
 
 test('Spotify new music keeps editorial order across pages rather than ranking artists already in the device library', () => {
@@ -248,5 +316,32 @@ test('Spotify catalog works without audio tools and failed pages remain retryabl
     await assert.rejects(service.catalog({ provider: 'spotify', kind: 'new' }), /503/);
     assert.equal((await service.catalog({ provider: 'spotify', kind: 'new' })).entries[0].title, '新歌');
     assert.equal(calls, 2);
+  } finally { service.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows music search follows credited artist profiles with bounded no-download requests and caches the resolved identity', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-artist-'));
+  for (const name of ['yt-dlp.exe', 'yt-dlp']) fs.writeFileSync(path.join(root, name), '');
+  const commands = [];
+  const spawnProcess = (_executable, args) => {
+    commands.push(args);
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => child.emit('close', 1);
+    const url = args.at(-1);
+    const data = url.endsWith('#artists') ? { entries: [{ url: `https://music.youtube.com/browse/${yasumuTopic}` }] }
+      : url.endsWith(yasumuTopic) ? topicProfile() : officialProfile();
+    setImmediate(() => { child.stdout.write(JSON.stringify(data)); child.emit('close', 0); });
+    return child;
+  };
+  const service = createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), spawnProcess });
+  try {
+    const input = { provider: 'youtube', kind: 'artists', query: 'yasumu' };
+    const result = await service.catalog(input);
+    assert.equal(result.items[0].url, `https://www.youtube.com/channel/${yasumuOfficial}`);
+    assert.equal(result.items[0].coverUrl, 'https://yt3.googleusercontent.com/artist-photo');
+    assert.equal(result.items[0].verified, true);
+    assert.deepEqual(await service.catalog(input), result);
+    assert.equal(commands.length, 3);
+    for (const args of commands) assert.ok(args.includes('--flat-playlist') && args.includes('--skip-download'));
+    for (const args of commands.slice(1)) assert.equal(args[args.indexOf('--playlist-end') + 1], '1');
   } finally { service.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
 });
