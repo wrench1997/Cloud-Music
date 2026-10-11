@@ -7,8 +7,12 @@ $resourceDirectory = Join-Path $taskRoot 'android\app\src\main\res\raw'
 $engineTarget = Join-Path $resourceDirectory 'ytdlp'
 $taskLocal = Join-Path $taskRoot '.local'
 $headers = @{ 'User-Agent' = 'Yungan-Music-Android-Build'; 'Accept' = 'application/vnd.github+json' }
+$releaseHeaders = $headers.Clone()
+# Use the existing CI authorization only for GitHub's API, never asset redirects.
+if ($env:GH_TOKEN) { $releaseHeaders['Authorization'] = "Bearer $env:GH_TOKEN" }
+elseif ($env:GITHUB_TOKEN) { $releaseHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $releaseUri = if ($Version) { "https://api.github.com/repos/yt-dlp/yt-dlp/releases/tags/$Version" } else { 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest' }
-$engineRelease = Invoke-RestMethod -Uri $releaseUri -Headers $headers
+$engineRelease = Invoke-RestMethod -Uri $releaseUri -Headers $releaseHeaders
 if ($engineRelease.draft -or $engineRelease.prerelease -or $engineRelease.tag_name -notmatch '^\d{4}\.\d{2}\.\d{2}(?:\.\d+)?$') { throw 'Expected an official stable yt-dlp release.' }
 $engineAsset = @($engineRelease.assets | Where-Object name -EQ 'yt-dlp')
 $checksumAsset = @($engineRelease.assets | Where-Object name -EQ 'SHA2-256SUMS')
