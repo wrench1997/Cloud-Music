@@ -33,12 +33,14 @@ import java.util.regex.Pattern;
 /** Native programs are executed from APK-installed nativeLibraryDir, never writable assets. */
 final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
     private final Context context;
+    private final NativeYoutubeDownloadSession youtubeSession;
     private boolean ready;
     private final Map<String, Process> conversions = Collections.synchronizedMap(new HashMap<>());
     private final ScheduledExecutorService timers = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, JSONObject> radioCache = Collections.synchronizedMap(new java.util.LinkedHashMap<>());
     private final Map<String, Long> radioExpiry = Collections.synchronizedMap(new HashMap<>());
-    NativeDownloadsYtdlpEngine(Context context) { this.context = context.getApplicationContext(); }
+    NativeDownloadsYtdlpEngine(Context context, NativeYoutubeDownloadSession youtubeSession) { this.context = context.getApplicationContext(); this.youtubeSession = youtubeSession; }
+    @Override public String authenticationRevision() { try { return youtubeSession.status().optString("revision"); } catch (Exception ignored) { return ""; } }
     @Override public synchronized void initialize() throws Exception {
         if (ready) return;
         if (Os.sysconf(OsConstants._SC_PAGESIZE) > 4096) throw new IOException("当前内置转换组件暂不支持此设备的 16 KB 内存页；已保留原有音乐。");
@@ -76,6 +78,8 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
     }
     private String execute(YoutubeDLRequest request, String id, long timeout, Progress progress) throws Exception {
         initialize();
+        File cookies = youtubeSession.lease();
+        if (cookies != null) request.addOption("--cookies", cookies.getAbsolutePath());
         ScheduledFuture<?> deadline = timers.schedule(() -> cancel(id), timeout, TimeUnit.MILLISECONDS);
         try {
             YoutubeDLResponse result = YoutubeDL.getInstance().execute(request, id, false, (percent, remaining, line) -> {
@@ -85,7 +89,7 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
             String output = result.getOut();
             if (output.getBytes(StandardCharsets.UTF_8).length > NativeDownloadPolicy.MAX_JSON_BYTES) throw new IOException("歌单返回内容过大。");
             return output;
-        } finally { deadline.cancel(false); }
+        } finally { deadline.cancel(false); if (cookies != null) cookies.delete(); }
     }
     private JSONObject data(YoutubeDLRequest request) throws Exception {
         return new JSONObject(execute(request, "query-" + UUID.randomUUID(), 180000, null));
@@ -299,6 +303,7 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
         initialize(); String id = NativeDownloadPolicy.videoId(source.getString("url"));
         if (directory.getUsableSpace() < 64L * 1024 * 1024) throw new IOException("手机剩余空间不足，请至少保留 64 MB 空间。");
         YoutubeDLRequest request = request(source.getString("url")).addOption("--no-playlist").addOption("--write-info-json").addOption("--no-overwrites")
+            .addOption("--sleep-interval", "5").addOption("--max-sleep-interval", "10")
             .addOption("--format", "bestaudio[ext=m4a]/bestaudio/best").addOption("--hls-prefer-native").addOption("--max-filesize", "150M")
             .addOption("--match-filter", "!is_live & duration <= 3600").addOption("--output", new File(directory, "source-" + id + ".%(ext)s").getAbsolutePath());
         execute(request, processId, 20 * 60 * 1000L, progress);

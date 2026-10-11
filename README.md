@@ -57,6 +57,10 @@ Spotify 的完整播放能力由平台、账号、地区和设备决定，可能
 
 网页下载接口限制为本机同源访问，电脑端共享服务使用随机配对码；网页下载后端不接收 Google 凭据。未实现私密平台歌单授权或受保护音源解密。联网找歌和下载需要设备能够访问相应平台，已下载的本机音乐可离线播放。音源可用性仍依赖平台和 yt-dlp 支持状态。
 
+Windows 和 Android 的“下载”提供“YouTube 下载登录”：应用内试听已经登录时，可点击“使用应用内试听登录”；若在外部浏览器登录，请导入该浏览器按 [yt-dlp 官方说明](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies) 导出的 YouTube `cookies.txt`。Google Drive 授权 JSON 不适用于 YouTube 下载。仅保留 YouTube 域名的 Cookie，加密保存在当前设备，下载器临时文件会在本次请求结束后移除，不通过配对接口或云端同步。Windows 使用系统凭据加密，Android 使用 Keystore 并排除备份。
+
+遇到登录或人机验证错误会暂停余下曲目，保留已下载的 MP3。完成 YouTube 网页验证并接入新的登录状态后，可以重试原曲目，无需重新下载成功歌曲；相同登录状态不会重复解锁重试。YouTube 仍可能要求网页验证，Cookie 接入不能保证每个版本都可下载；年龄、私密、会员或地区限制仍需另选可访问音源。
+
 ## 构建命令
 
 ```sh

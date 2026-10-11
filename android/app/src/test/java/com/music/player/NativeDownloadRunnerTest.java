@@ -23,7 +23,8 @@ public class NativeDownloadRunnerTest {
         store.add(job); return job;
     }
     private static class FakeEngine implements NativeDownloadEngine {
-        Set<String> fail = new HashSet<>(); int calls; String failureMessage = "fake source unavailable";
+        Set<String> fail = new HashSet<>(); int calls; String failureMessage = "fake source unavailable", authRevision = "";
+        public String authenticationRevision() { return authRevision; }
         java.util.List<String> requestedUrls = new java.util.ArrayList<>();
         public void initialize() {}
         public JSONObject inspect(String url) { return new JSONObject(); }
@@ -41,6 +42,24 @@ public class NativeDownloadRunnerTest {
             return new JSONObject().put("name", name).put("displayName", name).put("size", file.length())
                 .put("metadata", downloadedMetadata).put("localUri", file.toURI().toString());
         }
+    }
+    @Test public void authenticationChallengeStopsRemainingRequestsAndNewLoginRetriesOnlyMissingTracks() throws Exception {
+        NativeDownloadStore store = new NativeDownloadStore(temporary.newFolder()); JSONObject job = job(store, false);
+        job.getJSONArray("sources").put(new JSONObject().put("url", "https://www.youtube.com/watch?v=abcdefgh123").put("title", "third-song"));
+        job.put("total", 3); store.persist(job);
+        FakeEngine engine = new FakeEngine(); engine.authRevision = "old-login"; engine.fail.add("HMJPG2I42xg"); engine.failureMessage = "Sign in to confirm you're not a bot";
+        NativeDownloadRunner runner = new NativeDownloadRunner(store, engine, new FakeUploader(), value -> {});
+        runner.run(job.getString("id"), false);
+        assertEquals("partial", job.getString("state")); assertEquals(2, engine.calls); assertEquals(1, job.getJSONArray("files").length());
+        assertEquals(2, job.getJSONArray("failures").length());
+        for (int i = 0; i < 2; i++) assertEquals("old-login", job.getJSONArray("failures").getJSONObject(i).getString("youtubeAuthRevision"));
+        File kept = store.file(job.getString("id"), job.getJSONArray("files").getJSONObject(0).getString("name")); long size = kept.length();
+        engine.authRevision = "new-login"; engine.fail.clear();
+        JSONObject retry = NativeDownloadRetryPolicy.prepare(job, new JSONObject(), engine.authRevision);
+        job.put("sources", retry.getJSONArray("sources")).put("failures", retry.getJSONArray("failures"));
+        runner.run(job.getString("id"), false);
+        assertEquals("complete", job.getString("state")); assertEquals(4, engine.calls); assertEquals(3, job.getJSONArray("files").length());
+        assertEquals(size, kept.length()); assertEquals(0, job.getJSONArray("failures").length());
     }
     private static class FakeUploader implements NativeDownloadRunner.Uploader {
         int calls; boolean fail; Set<String> remote = new HashSet<>();

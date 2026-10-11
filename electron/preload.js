@@ -31,7 +31,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('app-update-state', listener);
     },
   },
-  downloads: { connect: (options) => ipcRenderer.invoke('downloads-connect', options) },
+  downloads: {
+    connect: (options) => ipcRenderer.invoke('downloads-connect', options),
+    youtube: Object.fromEntries(['status', 'usePreview', 'importCookies', 'clear', 'open'].map((method) => [method, async () => {
+      const result = await ipcRenderer.invoke(`youtube-download-${method}`);
+      if (!result.ok) throw new Error(result.error.message);
+      return result.data;
+    }])),
+  },
   google,
   musicCache,
   updatePlayerState: (state) => ipcRenderer.send('player-state', state),

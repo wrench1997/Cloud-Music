@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const os = require('node:os');
 const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
-const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls } = require('../src/lib/download-failure-policy');
+const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls, downloadFailureReason } = require('../src/lib/download-failure-policy');
 const { catalogOptions, catalogResult } = require('../src/lib/music-catalog');
 
 function searchOptions(value = {}) {
@@ -71,7 +71,7 @@ function parseSpotifyMetadata(html) {
   return { provider: 'spotify', title: entity.name || entity.title || 'Spotify 歌单', entries, notice: '读取的是公开嵌入页面可见曲目（最多 100 首），不保证完整。下载前请核对对应的 YouTube 音源。' };
 }
 
-function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, metadataProcess = spawn, fetchImpl = fetch }) {
+function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, metadataProcess = spawn, fetchImpl = fetch, youtubeSession }) {
   toolsDir = path.resolve(toolsDir);
   outputDir = path.resolve(outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
@@ -95,8 +95,11 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   }
   function missingSources(sources, files, knownFailures = [], fallback = '下载未完成，可重试。') {
     const completed = completedSourceUrls(files);
-    const errors = new Map(knownFailures.map((failure) => [canonicalYoutubeSource(failure.url), failure.error]));
-    return sources.filter((source) => !completed.has(canonicalYoutubeSource(source.url))).map((source) => ({ ...source, error: errors.get(canonicalYoutubeSource(source.url)) || fallback }));
+    const errors = new Map(knownFailures.map((failure) => [canonicalYoutubeSource(failure.url), failure]));
+    return sources.filter((source) => !completed.has(canonicalYoutubeSource(source.url))).map((source) => {
+      const failure = errors.get(canonicalYoutubeSource(source.url));
+      return { ...source, error: failure?.error || fallback, ...(failure?.youtubeAuthRevision !== undefined ? { youtubeAuthRevision: failure.youtubeAuthRevision } : {}) };
+    });
   }
   function persistJob(job) {
     const directory = path.join(outputDir, job.id);
@@ -135,13 +138,15 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   function toolArgs(audioRequired = true) {
     if (!fs.existsSync(executable) || (audioRequired && !fs.existsSync(ffmpeg))) throw new Error('下载工具未安装，请先运行 npm run media:install。');
     const runtime = fs.existsSync(nodeRuntime) ? nodeRuntime : process.execPath;
-    return ['--ignore-config', '--no-warnings', '--socket-timeout', '30', '--retries', '2', '--js-runtimes', `node:${runtime}`, '--remote-components', 'ejs:github'];
+    return ['--ignore-config', '--no-warnings', '--encoding', 'utf-8', '--socket-timeout', '30', '--retries', '2', '--js-runtimes', `node:${runtime}`, '--remote-components', 'ejs:github'];
   }
   function run(args, onLine, timeout = 180000) {
     if (disposed) return Promise.reject(new Error('下载服务已关闭。'));
+    let credentials;
+    try { credentials = youtubeSession?.lease(); } catch (error) { return Promise.reject(error); }
     return new Promise((resolve, reject) => {
       let child;
-      try { child = spawnProcess(executable, [...toolArgs(!args.includes('--skip-download')), ...args], { windowsHide: true, shell: false }); }
+      try { child = spawnProcess(executable, [...toolArgs(!args.includes('--skip-download')), ...(credentials?.args || []), ...(!args.includes('--skip-download') ? ['--sleep-interval', '5', '--max-sleep-interval', '10'] : []), ...args], { windowsHide: true, shell: false }); }
       catch (error) { reject(error); return; }
       children.add(child);
       let output = ''; let errors = ''; let pending = '';
@@ -160,7 +165,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
         if (code === 0) resolve(output);
         else reject(new Error(errors.trim() || '无法下载这个音源，它可能要求登录或不允许访问。'));
       });
-    });
+    }).finally(() => credentials?.dispose());
   }
   async function inspect(link) {
     const source = parseSource(link);
@@ -294,6 +299,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
         if (job.cancelled) break;
         job.title = sources[index].title;
         job.phase = 'download';
+        const youtubeAuthRevision = youtubeSession?.status().revision || '';
         try {
           await run(['--no-playlist', '--newline', '--progress', '--progress-template', 'download:PROGRESS:%(progress._percent_str)s', '-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0', '--ffmpeg-location', ffmpeg, '--embed-metadata', '--write-info-json', '--restrict-filenames', '-o', path.join(directory, '%(title).100s-%(id)s.%(ext)s'), '--', sources[index].url], (line) => {
             const percentage = line.match(/^PROGRESS:\s*([\d.]+)%/);
@@ -319,7 +325,14 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
         } catch (error) {
           const sourceId = new URL(sources[index].url).searchParams.get('v');
           for (const name of fs.readdirSync(directory)) if (name.endsWith(`-${sourceId}.mp3`) && fs.lstatSync(path.join(directory, name)).isFile() && !job.files.some((completed) => completed.name === name)) fs.unlinkSync(path.join(directory, name));
-          if (!job.cancelled) job.failures.push({ ...sources[index], error: error.message.slice(0, 1500) });
+          if (!job.cancelled) {
+            const failure = { ...sources[index], error: error.message.slice(0, 1500), youtubeAuthRevision };
+            job.failures.push(failure);
+            if (['verification', 'login'].includes(downloadFailureReason(failure).code)) {
+              job.failures.push(...sources.slice(index + 1).map((source) => ({ ...source, error: failure.error, youtubeAuthRevision })));
+              break;
+            }
+          }
         }
         job.progress = Math.min(99, Math.floor((alreadyCompleted + index + 1) / job.total * 100));
         persistJob(job);
@@ -336,7 +349,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
   }
   function retryJob(job, input = {}) {
     if (job.state === 'running' || [...jobs.values()].some((item) => item.state === 'running')) throw new Error('请等待当前下载任务完成。');
-    const plan = prepareFailedDownloadRetry(job, input);
+    const plan = prepareFailedDownloadRetry(job, input, youtubeSession?.status());
     toolArgs();
     const sources = plan.pending.map((source) => normalizeTrack(source));
     job.sources = plan.sources;
@@ -414,7 +427,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     if (request.headers.authorization !== `Bearer ${token}`) { reply(response, 401, { error: '配对码不正确。' }); return; }
     const url = new URL(request.url, 'http://localhost');
     try {
-      if (request.method === 'GET' && url.pathname === '/status') { reply(response, 200, { ready: fs.existsSync(executable) && fs.existsSync(ffmpeg), jobs: [...jobs.values()].sort((left, right) => left.createdAt - right.createdAt).map(publicJob) }); return; }
+      if (request.method === 'GET' && url.pathname === '/status') { reply(response, 200, { ready: fs.existsSync(executable) && fs.existsSync(ffmpeg), youtubeAuth: youtubeSession?.status() || { supported: false, configured: false, revision: '' }, jobs: [...jobs.values()].sort((left, right) => left.createdAt - right.createdAt).map(publicJob) }); return; }
       if (request.method === 'POST' && url.pathname === '/inspect') { reply(response, 200, await inspect((await readJson(request)).url)); return; }
       if (request.method === 'POST' && url.pathname === '/match') { reply(response, 200, await match(await readJson(request))); return; }
       if (request.method === 'POST' && url.pathname === '/search') { reply(response, 200, await search(await readJson(request))); return; }
@@ -485,7 +498,7 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
     delete request.headers.origin;
     return handle(request, response);
   }
-  return { connect, inspect, match, search, catalog, radio, startJob, repairJob, dispose, handleLocal };
+  return { connect, inspect, match, search, catalog, radio, startJob, repairJob, dispose, handleLocal, isBusy: () => [...jobs.values()].some((job) => job.state === 'running') };
 }
 
 module.exports = { createDownloadService, parseSource, parseSpotifyMetadata, searchOptions, radioOptions };

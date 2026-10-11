@@ -8,6 +8,7 @@ interface NativeDownloadEngine {
     interface Progress { void update(String phase, int percent); }
     interface Cancelled { boolean get(); }
     void initialize() throws Exception;
+    default String authenticationRevision() { return ""; }
     JSONObject inspect(String url) throws Exception;
     JSONObject search(JSONObject value) throws Exception;
     default JSONObject catalog(JSONObject value) throws Exception { throw new java.io.IOException("此版本暂不支持歌手与专辑浏览，请更新应用。"); }
