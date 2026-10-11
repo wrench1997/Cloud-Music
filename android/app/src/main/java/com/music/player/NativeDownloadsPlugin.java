@@ -49,19 +49,42 @@ public class NativeDownloadsPlugin extends Plugin implements NativeDownloadsMana
     @PluginMethod public void youtubeStatus(PluginCall call) { execute(call, () -> manager.youtubeStatus()); }
     @PluginMethod public void youtubeClear(PluginCall call) { execute(call, () -> manager.youtubeClear()); }
     @PluginMethod public void youtubeUsePreview(PluginCall call) {
-        String cookies = CookieManager.getInstance().getCookie("https://www.youtube.com/");
-        execute(call, () -> {
-            if (cookies == null || cookies.isEmpty()) throw new IOException("应用内没有 YouTube 登录。如果是在外部浏览器登录，请导入该浏览器的 cookies.txt。");
-            return manager.youtubeConfigure(NativeYoutubeCookies.fromHeader(cookies), "preview");
+        connectYoutubeCookies(call, "preview");
+    }
+    private void connectYoutubeCookies(PluginCall call, String source) {
+        getActivity().runOnUiThread(() -> {
+            CookieManager cookies = CookieManager.getInstance();
+            String youtube = cookies.getCookie("https://www.youtube.com/"), music = cookies.getCookie("https://music.youtube.com/"), mobile = cookies.getCookie("https://m.youtube.com/");
+            execute(call, () -> {
+                String text;
+                try { text = NativeYoutubeCookies.fromHeaders(youtube, music, mobile); }
+                catch (IOException error) { throw new IOException("没有检测到应用内的 YouTube 登录，请点击“登录 YouTube 并接入下载”，或导入浏览器登录文件。"); }
+                return manager.youtubeConfigure(text, source);
+            });
         });
+    }
+    @PluginMethod public void youtubeSignIn(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            try { startActivityForResult(call, new Intent(getActivity(), NativeYoutubeLoginActivity.class), "youtubeLoginFinished"); }
+            catch (Exception error) { call.reject("无法打开 YouTube 登录页面，请导入浏览器登录文件。", error); }
+        });
+    }
+    @ActivityCallback private void youtubeLoginFinished(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() == NativeYoutubeLoginActivity.RESULT_IMPORT_COOKIES) { youtubeImportCookies(call); return; }
+        if (result.getResultCode() != Activity.RESULT_OK) { execute(call, () -> manager.youtubeStatus().put("canceled", true)); return; }
+        connectYoutubeCookies(call, "webview");
     }
     @PluginMethod public void youtubeOpen(PluginCall call) {
         try { getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/"))); call.resolve(); }
         catch (Exception error) { call.reject("无法打开 YouTube，请使用浏览器登录后导入登录文件。", error); }
     }
     @PluginMethod public void youtubeImportCookies(PluginCall call) {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("text/*");
-        startActivityForResult(call, intent, "youtubeCookiesSelected");
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+        getActivity().runOnUiThread(() -> {
+            try { startActivityForResult(call, intent, "youtubeCookiesSelected"); }
+            catch (Exception error) { call.reject("无法选择登录文件，请检查手机的文件选择器后重试。", error); }
+        });
     }
     @ActivityCallback private void youtubeCookiesSelected(PluginCall call, ActivityResult result) {
         if (call == null) return;

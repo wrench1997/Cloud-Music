@@ -33,4 +33,20 @@ public class NativeYoutubeCookiesTest {
         try { NativeYoutubeCookies.fromHeader("PREF=fixture-pref"); fail("must require a login cookie"); }
         catch (IOException expected) { assertTrue(expected.getMessage().contains("没有有效")); }
     }
+    @Test public void musicAndMobileLoginHeadersRetainTheirOwnHostScope() throws Exception {
+        String text = NativeYoutubeCookies.fromHeaders("PREF=www-pref", "SID=music-session; PREF=music-pref", "SID=mobile-session");
+        assertTrue(text.contains("music.youtube.com\tFALSE\t/\tTRUE\t0\tSID\tmusic-session"));
+        assertTrue(text.contains("m.youtube.com\tFALSE\t/\tTRUE\t0\tSID\tmobile-session"));
+        assertTrue(text.contains("www.youtube.com\tFALSE\t/\tTRUE\t0\tPREF\twww-pref"));
+        assertFalse(text.contains("www.youtube.com\tFALSE\t/\tTRUE\t0\tSID"));
+        assertFalse(text.contains(".youtube.com\tTRUE"));
+    }
+    @Test public void collectingLoginHeadersRejectsMissingAuthenticationAndInjectedRows() throws Exception {
+        for (String[] headers : new String[][]{{null, null, null}, {"PREF=www", "PREF=music", null},
+            {null, "SID=fixture-secret\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tfixture-secret", null},
+            {"SID=fixture-secret with-space", null, null}}) {
+            try { NativeYoutubeCookies.fromHeaders(headers[0], headers[1], headers[2]); fail("must reject invalid login"); }
+            catch (IOException expected) { assertFalse(expected.getMessage().contains("fixture-secret")); }
+        }
+    }
 }

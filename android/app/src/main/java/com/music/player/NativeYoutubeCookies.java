@@ -39,11 +39,20 @@ final class NativeYoutubeCookies {
         return "# Netscape HTTP Cookie File\n" + String.join("\n", rows.values()) + "\n";
     }
     static String fromHeader(String header) throws IOException {
+        return fromHeaders(header, null, null);
+    }
+    static String fromHeaders(String youtube, String music, String mobile) throws IOException {
         StringBuilder text = new StringBuilder("# Netscape HTTP Cookie File\n");
+        appendHeader(text, "www.youtube.com", youtube);
+        appendHeader(text, "music.youtube.com", music);
+        appendHeader(text, "m.youtube.com", mobile);
+        return normalize(text.toString(), System.currentTimeMillis());
+    }
+    private static void appendHeader(StringBuilder text, String host, String header) throws IOException {
+        if (header != null && header.matches("(?s).*[\\x00-\\x1f\\x7f].*")) throw new IOException("应用内 YouTube 登录格式无效，请重新登录。");
         if (header != null) for (String part : header.split(";")) {
             int equal = part.indexOf('=');
-            if (equal > 0) text.append("www.youtube.com\tFALSE\t/\tTRUE\t0\t").append(part.substring(0, equal).trim()).append('\t').append(part.substring(equal + 1).trim()).append('\n');
+            if (equal > 0) text.append(host).append("\tFALSE\t/\tTRUE\t0\t").append(part.substring(0, equal).trim()).append('\t').append(part.substring(equal + 1).trim()).append('\n');
         }
-        return normalize(text.toString(), System.currentTimeMillis());
     }
 }
