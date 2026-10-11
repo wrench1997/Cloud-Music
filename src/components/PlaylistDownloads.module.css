@@ -20,3 +20,83 @@
 .youtubeLogin p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .youtubeLogin a { color: var(--red, #ef4444); }
 .youtubeLogin .cookiePrivacy { color: var(--muted, #747474); font-size: 12px; }
+.listHeading { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.listHeading h2 { margin:0; font-size:17px; font-weight:600; }
+.listHeading h2 small { margin-left:7px; color:#a3919c; font-size:12px; font-weight:400; }
+.listHeading>div { display:flex; align-items:center; gap:4px; }
+.textButton { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:8px 10px; color:#ad6b83; font-size:12px; }
+.selectionBar { position:sticky; z-index:12; top:0; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; min-height:66px; margin:0 -2px; padding:9px 2px; border-bottom:1px solid #efe7eb; background:#fffffff7; }
+.selectionBar>label,.saveSettings>label { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:44px; font-size:12px; }
+.selectionBar input { width:18px; height:18px; }
+.selectionBar small { color:#9c8894; font-size:11px; }
+.selectionBar>div { display:flex; align-items:center; gap:8px; }
+.selectionBar>div>button { min-height:44px; padding:11px 17px; font-size:12px; }
+.selectionBar>div>:global(.red-button) { min-width:136px; color:#fff; }
+.selectionBar>div>:global(.outline-button) { padding:10px 12px; }
+.sourceHint { margin:10px 2px; color:#9c8490; font-size:11px; }
+.trackSearch { display:flex; align-items:center; gap:8px; min-height:44px; margin-top:12px; padding:0 12px; border:1px solid #eee5ea; border-radius:12px; color:#a08292; background:#faf8fa; }
+.trackSearch>span { font-size:22px; }
+.trackSearch input { width:100%; min-width:0; border:0; outline:0; background:transparent; color:#4f3f49; font-size:12px; }
+.trackSearch button { flex-shrink:0; min-width:32px; min-height:44px; font-size:20px; }
+.trackSearch .onlyMatches { min-width:68px; color:#c15476; font-size:11px; }
+.trackList { max-height:none; overflow:visible; margin:8px 0 14px; }
+.trackList :global(.download-track) { gap:9px; margin:2px 0; padding:6px 10px; border-bottom-color:#f3edf0; border-radius:10px; }
+.trackList :global(.download-track)>label { min-width:150px; min-height:44px; cursor:pointer; }
+.trackList :global(.download-track)>label>span { min-width:0; }
+.trackList :global(.download-track) b { font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.trackList :global(.download-track) small { font-size:11px; line-height:1.6; }
+.trackList :global(.download-track) input { flex-shrink:0; width:18px; height:18px; }
+.trackList :global(.download-track)>button,.trackList :global(.download-track)>a { display:inline-flex; align-items:center; min-height:44px; padding:8px 5px; font-size:11px; }
+.trackList .selectedTrack { background:#fff7f9; }
+.trackList :global(.download-candidates)>div { padding:8px 0; }
+.trackList :global(.download-candidates) button { min-height:44px; padding:8px 12px; border:1px solid #efd1dc; border-radius:10px; background:#fff; }
+.showMore { display:block; width:100%; min-height:44px; margin-top:10px; border:1px solid #eee2e9; border-radius:12px; color:#95647a; background:#faf6f8; font-size:12px; }
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; min-height:130px; padding:24px 12px; color:#9c8a94; text-align:center; }
+.empty>span { display:grid; place-items:center; width:48px; height:48px; border-radius:16px; color:#e96882; background:#fff0f3; font-size:27px; }
+.empty>b { color:#7c6572; font-size:14px; font-weight:500; }
+.empty p { margin:0; font-size:12px; }
+.utilities { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:10px; margin:14px 0 8px; }
+.utilities .youtubeLogin,.saveSettings { min-width:0; padding:0; margin:0; border:1px solid #eee4ea; border-radius:13px; background:#fff; }
+.utilities .youtubeLogin>summary,.saveSettings>summary { display:flex; align-items:center; gap:6px; min-height:48px; padding:10px 12px; color:#796372; font-size:12px; font-weight:500; list-style:none; cursor:pointer; }
+.utilities summary::-webkit-details-marker { display:none; }
+.utilities .youtubeLogin>summary::before,.saveSettings>summary::before { content:'›'; color:#b293a3; font-size:18px; transition:transform 140ms ease-out; }
+.utilities .youtubeLogin[open]>summary::before,.saveSettings[open]>summary::before { transform:rotate(90deg); }
+.utilities .youtubeLogin>summary>span,.saveSettings>summary>span { margin-left:auto; color:#a38d9b; font-size:10px; white-space:nowrap; }
+.utilities .youtubeLogin p,.saveSettings>p { margin:10px 12px; font-size:11px; }
+.utilities .youtubeLogin .actions { gap:6px; padding:0 12px; }
+.utilities .youtubeLogin button { padding:10px 12px; font-size:11px; }
+.saveSettings>label { margin:4px 12px; line-height:1.6; }
+.saveSettings>label input { width:18px; height:18px; }
+.saveSettings>:global(.config-button) { min-height:44px; margin:0 12px 8px; }
+.mobileConnection { margin:12px; padding-top:10px; border-top:1px solid #f1e8ed; }
+.mobileConnection>summary { min-height:44px; color:#a48b99; cursor:pointer; }
+.mobileConnection code { display:block; overflow-wrap:anywhere; font-size:11px; }
+.activity { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:3px 12px; margin:6px 0; border:1px solid #f3dbe5; border-radius:12px; color:#be536f; background:#fff5f8; font-size:12px; }
+.activity>span { display:flex; align-items:center; gap:8px; }
+.spinner { display:inline-block; flex-shrink:0; width:13px; height:13px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin 700ms linear infinite; }
+.skeleton { padding:16px 8px; color:#ab8999; }
+.skeleton p { display:flex; align-items:center; gap:8px; margin:0 0 18px; font-size:12px; }
+.skeleton>div { display:flex; align-items:center; gap:12px; height:58px; }
+.skeleton>div i { width:18px; height:18px; border-radius:5px; background:#f2eaf0; }
+.skeleton>div span { width:55%; height:13px; border-radius:6px; background:#f2eaf0; animation:pending 1.2s ease-in-out infinite alternate; }
+.skeleton>div span:last-child { width:15%; margin-left:auto; }
+.readError { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:14px 12px; margin-top:12px; border-radius:12px; color:#c55165; background:#fff1f4; }
+.readError>span { flex:1; min-width:180px; overflow-wrap:anywhere; }
+.jobPanel { scroll-margin-top:85px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes pending { to { opacity:.4; } }
+@media(max-width:760px) {
+  .listHeading h2 { font-size:15px; }
+  .selectionBar { gap:6px; }
+  .selectionBar>label { gap:6px; font-size:11px; }
+  .selectionBar small { font-size:10px; }
+  .selectionBar>div>button { padding:10px 12px; font-size:12px; }
+  .selectionBar>div>:global(.red-button) { min-width:125px; }
+  .trackList :global(.download-track) { padding:6px; }
+  .utilities { grid-template-columns:minmax(0,1fr); gap:8px; }
+  .utilities .youtubeLogin>summary,.saveSettings>summary { min-height:46px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .spinner,.skeleton>div span { animation:none; }
+  .utilities summary::before { transition:none; }
+}

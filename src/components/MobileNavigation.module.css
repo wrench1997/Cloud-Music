@@ -3,6 +3,8 @@
 .navigation button[aria-current='page'] { color:#de3b54; background:#fff0f3; }
 .navigation button:active { background:#f8edf0; }
 .navigation button:focus-visible { outline:2px solid #ec4141; outline-offset:2px; }
+.navigation button { transition:color 140ms ease-out,background-color 140ms ease-out; }
+.navigation button .icon { transition:transform 140ms ease-out; }
 .icon { position:relative; display:grid; place-items:center; width:25px; height:25px; }
 .dot { position:absolute; right:-1px; top:-1px; width:7px; height:7px; border:1.5px solid #fff; border-radius:50%; background:#ec4141; }
 .standalone { display:flex; top:14px; left:max(22px,calc((100vw - 1100px)/2)); padding:5px; border-radius:20px; box-shadow:0 6px 24px #5e243810; }
@@ -12,4 +14,4 @@
   .navigation button[aria-current='page'] { color:#d8324e; background:#fff1f4; }
   .navigation button[aria-current='page'] .icon { transform:translateY(-1px); }
 }
-@media(prefers-reduced-motion:reduce) { .navigation button .icon { transform:none; } }
+@media(prefers-reduced-motion:reduce) { .navigation button,.navigation button .icon { transition:none; } .navigation button .icon { transform:none; } }
