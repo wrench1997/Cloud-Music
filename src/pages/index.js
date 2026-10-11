@@ -76,10 +76,10 @@ const knownAlbum = (song) => Boolean(song?.album?.trim() && !/^(未知专辑|unk
 const SongRow = memo(function SongRow({ song, index, playing, isPlaying, disabled, api, onPlay, onMenu, onMenuKeyDown, onCatalog }) {
   return <div className={`track-row ${playing ? 'playing' : ''}`} onContextMenu={(event) => onMenu(event, song)} onKeyDown={(event) => onMenuKeyDown(event, song)} role="group" aria-label={song.title || '未知歌曲'}>
     <button className="track-index" disabled={disabled} aria-label={`播放 ${song.title}`} onClick={() => onPlay(song)}>{isPlaying ? <i className="equalizer"><b /><b /><b /></i> : String(index + 1).padStart(2, '0')}</button>
-    <span className="track-title">
-      <button className="art" disabled={disabled} aria-label={`播放 ${song.title}`} onClick={() => onPlay(song)}><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></button>
-      <span><button className="track-name" disabled={disabled} onClick={() => onPlay(song)}><b>{song.title || '未知歌曲'}</b></button><small><button className="metadata-link" disabled={!knownArtist(song)} onClick={() => onCatalog(song, 'artists')} title={`查看歌手 ${song.artist}`}>{song.artist || '未知歌手'}</button></small></span>
-    </span>
+    <button className="track-title" disabled={disabled} aria-label={`播放 ${song.title || '未知歌曲'}`} onClick={() => onPlay(song)}>
+      <span className="art"><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></span>
+      <span><b>{song.title || '未知歌曲'}</b><small>{song.artist || '未知歌手'}</small></span>
+    </button>
     <button className="album metadata-link" disabled={!knownAlbum(song)} onClick={() => onCatalog(song, 'albums')} title={`查看专辑 ${song.album}`}>{song.album || '未知专辑'}</button>
     <span className="track-tail"><span className="track-duration">{formatTime(song.duration)}</span><button className="track-more" aria-label={`${song.title}的更多操作`} aria-haspopup="menu" onClick={(event) => onMenu(event, song)}>⋯</button></span>
   </div>;
@@ -209,6 +209,7 @@ export default function Home() {
   const repairSongsRef = useRef(null);
   const playbackControllerRef = useRef(null);
   const playbackRequestRef = useRef(0);
+  const listPlayRequestRef = useRef(null);
   const blobUrlRef = useRef('');
   const sessionGenerationRef = useRef(0);
   const musicStateRef = useRef({ favorites: [], recent: [] });
@@ -880,7 +881,25 @@ export default function Home() {
     }
   };
 
-  const playSong = (song) => currentSong?.id === song.id && (audioSrc || nativeLoadedRef.current) ? togglePlay() : startSong(song, visibleSongs);
+  const playSong = async (song) => {
+    if (listPlayRequestRef.current?.songId === song.id) return;
+    const request = { songId: song.id };
+    listPlayRequestRef.current = request;
+    try {
+      // Selecting a song means play/resume, so a second tap cannot pause it.
+      if (currentSong?.id === song.id && (audioSrc || nativeLoadedRef.current)) {
+        if (loadingTrack || isPlaying) return;
+        if (isNative) {
+          await NativeAudio.play();
+          if (listPlayRequestRef.current === request && playbackStateRef.current.currentSong?.id === song.id) setIsPlaying(true);
+        } else await audioRef.current?.play();
+      } else await startSong(song, visibleSongs);
+    } catch (failure) {
+      if (listPlayRequestRef.current === request && playbackStateRef.current.currentSong?.id === song.id) { setError(failure.message); setIsPlaying(false); }
+    } finally {
+      if (listPlayRequestRef.current === request) listPlayRequestRef.current = null;
+    }
+  };
 
   const togglePlay = async () => {
     if (!currentSong) return;

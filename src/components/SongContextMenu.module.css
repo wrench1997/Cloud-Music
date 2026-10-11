@@ -22,3 +22,7 @@
 .dialog footer button.confirmButton { color:#fff; background:#e43e4b; }
 .dialog footer button:focus-visible { outline:2px solid #ec4141; outline-offset:3px; }
 .dialog footer button:disabled { opacity:.55; cursor:wait; }
+
+@media (max-width:760px) {
+  .menu button { min-height:48px; }
+}
