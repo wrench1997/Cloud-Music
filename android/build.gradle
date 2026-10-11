@@ -3,9 +3,13 @@
 buildscript {
     
     repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        maven { url 'https://maven.aliyun.com/repository/central' }
+        // Hosted CI can reach the official repositories directly; mirror errors
+        // would otherwise disable resolution before Gradle can fall back.
+        if (System.getenv('CI') != 'true') {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            maven { url 'https://maven.aliyun.com/repository/central' }
+        }
         google()
         mavenCentral()
     }
@@ -22,9 +26,11 @@ apply from: "variables.gradle"
 
 allprojects {
     repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        maven { url 'https://maven.aliyun.com/repository/central' }
+        if (System.getenv('CI') != 'true') {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            maven { url 'https://maven.aliyun.com/repository/central' }
+        }
         google()
         mavenCentral()
     }
