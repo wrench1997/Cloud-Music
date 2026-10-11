@@ -36,6 +36,7 @@ final class NativeDownloadsManager {
     private final Context context;
     private final NativeDownloadStore store;
     private final NativeDownloadEngine engine;
+    private final NativeYoutubeDownloadSession youtubeSession;
     private final NativeDriveUpload uploader;
     private final NativeDownloadRunner runner;
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
@@ -49,7 +50,8 @@ final class NativeDownloadsManager {
     private NativeDownloadsManager(Context context) throws Exception {
         this.context = context;
         store = new NativeDownloadStore(new File(context.getNoBackupFilesDir(), "native-music"));
-        engine = new NativeDownloadsYtdlpEngine(context); uploader = new NativeDriveUpload(context);
+        youtubeSession = new NativeYoutubeDownloadSession(context);
+        engine = new NativeDownloadsYtdlpEngine(context, youtubeSession); uploader = new NativeDriveUpload(context);
         runner = new NativeDownloadRunner(store, engine, uploader, this::changed);
     }
     void addListener(Listener listener) { listeners.addIfAbsent(listener); }
@@ -79,7 +81,7 @@ final class NativeDownloadsManager {
         if ("/status".equals(route) && "GET".equals(method)) {
             engine.initialize(); JSONArray jobs = new JSONArray();
             synchronized (store) { for (JSONObject job : store.all()) jobs.put(copy(job)); }
-            return new JSONObject().put("ready", true).put("native", true).put("remembersTasks", true).put("jobs", jobs);
+            return new JSONObject().put("ready", true).put("native", true).put("remembersTasks", true).put("jobs", jobs).put("youtubeAuth", youtubeSession.status());
         }
         if ("POST".equals(method)) {
             if ("/inspect".equals(route)) return engine.inspect(data.optString("url", ""));
@@ -103,7 +105,7 @@ final class NativeDownloadsManager {
         synchronized (store) {
             job = store.job(id);
             NativeDownloadPolicy.requireRestartIdle(id, activeId, job.optBoolean("cancelled"), job.optString("state"));
-            JSONObject retry = "retry".equals(action) ? NativeDownloadRetryPolicy.prepare(job, data) : null;
+            JSONObject retry = "retry".equals(action) ? NativeDownloadRetryPolicy.prepare(job, data, youtubeSession.status().optString("revision")) : null;
             if ("running".equals(job.optString("state"))) {
                 if ("retry".equals(action)) return copy(job);
                 JSONObject requested = NativeDownloadPolicy.cloud(data.optJSONObject("cloud")), current = job.getJSONObject("cloud");
@@ -122,6 +124,18 @@ final class NativeDownloadsManager {
         }
         enqueue(id, "upload".equals(action));
         synchronized (store) { return copy(job); }
+    }
+    JSONObject youtubeStatus() throws Exception { return youtubeSession.status(); }
+    private void requireYoutubeIdle() throws Exception {
+        if (activeId != null) throw new IOException("请先等待或取消当前下载，再更改 YouTube 下载登录。");
+        for (JSONObject job : store.all()) if ("running".equals(job.optString("state")))
+            throw new IOException("请先等待或取消当前下载，再更改 YouTube 下载登录。");
+    }
+    JSONObject youtubeConfigure(String text, String source) throws Exception {
+        synchronized (store) { requireYoutubeIdle(); return youtubeSession.configure(text, source); }
+    }
+    JSONObject youtubeClear() throws Exception {
+        synchronized (store) { requireYoutubeIdle(); return youtubeSession.clear(); }
     }
     private JSONObject create(JSONObject data) throws Exception {
         JSONArray entries = data.optJSONArray("entries");

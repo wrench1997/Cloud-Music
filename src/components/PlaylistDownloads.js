@@ -5,6 +5,7 @@ import { recommendSource } from '../lib/source-matching';
 import { transferDownloadedFiles } from '../lib/downloaded-transfers';
 import { ACTIVE_STATES, normalizeDownloadJob, mergeDownloadJobs, downloadJobLabel, cloudPhase, cloudStatusLabel, nativeCloudConfig, needsNativeCloudUpload } from '../lib/download-job-state';
 import MusicDiscovery from './MusicDiscovery';
+import YoutubeDownloadLogin from './YoutubeDownloadLogin';
 import { downloadFailureReason, canonicalYoutubeSource, completedSourceUrls, replacementSearch } from '../lib/download-failure-policy';
 import styles from './PlaylistDownloads.module.css';
 
@@ -28,6 +29,8 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const [discoveredEntries, setDiscoveredEntries] = useState(false);
   const [failureCandidates, setFailureCandidates] = useState({});
   const [sourceReplacements, setSourceReplacements] = useState({});
+  const [youtubeAuth, setYoutubeAuth] = useState({ configured: false, revision: '' });
+  const [youtubeLoginRequested, setYoutubeLoginRequested] = useState(0);
   const runningJob = jobs.find((task) => ACTIVE_STATES.has(task.state));
   const canUpload = Boolean(onUpload);
   const handled = useRef(new Set());
@@ -74,6 +77,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const connect = async (config) => {
     setCatalogConnection(config);
     const status = await request(config, '/status');
+    if (status.youtubeAuth) setYoutubeAuth(status.youtubeAuth);
     if (!status.ready) throw new Error(status.error || (config.native ? '下载功能暂时未能准备好，请重试。' : '下载组件尚未准备好，请联系应用管理员安装下载组件。'));
     setConnection(config);
     if (status.jobs?.length) receiveJobs(status.jobs);
@@ -128,6 +132,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       try {
         const status = await request(connection, '/status');
         if (alive && status.jobs) receiveJobs(status.jobs);
+        if (alive && status.youtubeAuth) setYoutubeAuth(status.youtubeAuth);
       } catch (requestError) { if (alive) setError(`无法读取任务状态：${requestError.message}`); }
       finally { inFlight = false; }
     }, 4000);
@@ -366,6 +371,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     {!discoveryMode && playlist?.provider === 'spotify' && <p>下载来源：YouTube。导入 Spotify 曲目后匹配音源，请核对歌曲版本。</p>}
     {!connection && <p>{connecting ? '正在准备下载功能…' : <button className="outline-button" onClick={connectAutomatically}>重试准备下载</button>}</p>}
     {connection && <>
+      <YoutubeDownloadLogin auth={youtubeAuth} onChange={setYoutubeAuth} blocked={Boolean(runningJob)} requested={youtubeLoginRequested} attention={job?.failures?.some((failure) => ['verification', 'login'].includes(downloadFailureReason(failure).code))} />
       {typeof window !== 'undefined' && window.electronAPI?.downloads && <div><button className="outline-button" onClick={() => perform(async () => {
         const result = await window.electronAPI.downloads.connect({ lan: true }); setMobileLinks(result.pairingLinks);
       })}>开启手机连接</button>{mobileLinks.map((pairingLink) => <p key={pairingLink}><code>{pairingLink}</code><button onClick={() => perform(() => navigator.clipboard.writeText(pairingLink))}>复制配对链接</button></p>)}</div>}
@@ -396,11 +402,11 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
         {Boolean(job.failures?.length) && !ACTIVE_STATES.has(job.state) && <section className={styles.failures} aria-label="未完成曲目">
           <h3>还有 {job.failures.length} 首未完成</h3><p>已下载的 {job.completed} 首会保留。更换音源会保留原歌曲名称、歌手和封面。</p>
           {job.failures.map((failure) => {
-            const reason = downloadFailureReason(failure), key = failureKey(job, failure), selectedSource = sourceReplacements[key];
+            const reason = downloadFailureReason(failure, youtubeAuth), key = failureKey(job, failure), selectedSource = sourceReplacements[key];
             return <article key={key} className={styles.failure}>
               <div><strong>{failure.title || '未完成歌曲'}</strong>{failure.artist && <span className={styles.artist}>{failure.artist}</span>}</div>
               <p className={styles.reason}>{reason.label}</p><p>{reason.detail}</p>
-              <div className={styles.actions}><button className="outline-button" disabled={busy} onClick={() => findFailureSource(job, failure)}>查找其他音源</button><a href={failure.url} target="_blank" rel="noopener noreferrer">查看原音源 ↗</a></div>
+              <div className={styles.actions}>{youtubeAuth.supported && ['verification', 'login'].includes(reason.code) && <button className="outline-button" disabled={busy} onClick={() => setYoutubeLoginRequested((value) => value + 1)}>连接下载登录</button>}<button className="outline-button" disabled={busy} onClick={() => findFailureSource(job, failure)}>查找其他音源</button><a href={failure.url} target="_blank" rel="noopener noreferrer">查看原音源 ↗</a></div>
               {failureCandidates[key] && <div className={styles.candidates}><p>候选来自 YouTube 搜索，请核对版本；继续下载时会确认是否可用。</p>
                 {failureCandidates[key].length ? failureCandidates[key].map((candidate) => <div key={candidate.url} className={styles.candidate}>
                   <span><strong>{candidate.title}</strong><small>{candidate.artist}{candidate.duration ? ` · ${Math.round(candidate.duration)} 秒` : ''}</small></span>
@@ -411,8 +417,8 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
               {selectedSource && <p className={styles.selection}>已选：{selectedSource.title}。点击下方按钮继续下载。</p>}
             </article>;
           })}
-          <button className="red-button" disabled={busy || (!connection.native && Boolean(runningJob)) || job.failures.some((failure) => !downloadFailureReason(failure).canRetry && !sourceReplacements[failureKey(job, failure)])} onClick={() => retryFailures(job)}>{job.failures.some((failure) => sourceReplacements[failureKey(job, failure)]) ? '更换音源并继续' : '重试失败曲目'}</button>
-          {job.failures.some((failure) => !downloadFailureReason(failure).canRetry && !sourceReplacements[failureKey(job, failure)]) && <p>请先为限制访问的曲目选择其他音源，再继续下载。</p>}
+          <button className="red-button" disabled={busy || (!connection.native && Boolean(runningJob)) || job.failures.some((failure) => !downloadFailureReason(failure, youtubeAuth).canRetry && !sourceReplacements[failureKey(job, failure)])} onClick={() => retryFailures(job)}>{job.failures.some((failure) => sourceReplacements[failureKey(job, failure)]) ? '更换音源并继续' : '重试失败曲目'}</button>
+          {job.failures.some((failure) => !downloadFailureReason(failure, youtubeAuth).canRetry && !sourceReplacements[failureKey(job, failure)]) && <p>请先接入新的 YouTube 下载登录，或为限制访问的曲目选择其他音源，再继续下载。</p>}
         </section>}
         {job.error && <details className="login-error"><summary>技术详情（{job.failures?.length || 1} 首）</summary><p style={{ whiteSpace: 'pre-wrap' }}>{job.error}</p></details>}
         {!connection.native && Boolean(job.files.length) && <div className="download-actions"><button className="outline-button" disabled={busy || transferring || !playlist || discoveredEntries || job.state === 'running'} onClick={() => perform(async () => {

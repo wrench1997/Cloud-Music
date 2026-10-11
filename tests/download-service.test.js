@@ -23,6 +23,64 @@ async function settledJob(connection, id) {
   throw new Error('Fixture did not finish');
 }
 
+test('YouTube download login is passed to extraction and temporary credentials are removed on success and spawn failure', async (t) => {
+  const { createYoutubeDownloadSession } = require('../electron/youtube-download-session');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-cookie-extraction-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const name of ['yt-dlp.exe', 'yt-dlp', 'ffmpeg.exe', 'ffmpeg']) fs.writeFileSync(path.join(root, name), '');
+  const session = createYoutubeDownloadSession({ directory: root, safeStorage: { isEncryptionAvailable: () => true, encryptString: () => Buffer.from('encrypted-fixture') } });
+  session.configure('# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tfixture-session\n');
+  let fail = false; const jars = [];
+  const service = createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), youtubeSession: session, spawnProcess: (_exe, args) => {
+    const jar = args[args.indexOf('--cookies') + 1]; assert.match(fs.readFileSync(jar, 'utf8'), /fixture-session/); jars.push(jar);
+    assert.ok(args.includes('--encoding')); assert.equal(args.includes('--sleep-interval'), false);
+    if (fail) throw new Error('fixture spawn failure');
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => child.emit('close', 1);
+    setImmediate(() => { child.stdout.write(JSON.stringify({ id: 'o7hCv63iWoo', title: 'Fixture song' })); child.emit('close', 0); }); return child;
+  } });
+  try {
+    assert.equal((await service.inspect('https://youtu.be/o7hCv63iWoo')).entries.length, 1);
+    assert.equal(fs.existsSync(jars[0]), false); fail = true;
+    await assert.rejects(service.inspect('https://youtu.be/o7hCv63iWoo'), /fixture spawn failure/);
+    assert.equal(fs.existsSync(jars[1]), false);
+  } finally { service.dispose(); session.dispose(); }
+});
+
+test('authentication failure pauses the rest of the playlist and changed login retries original sources after restart', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'music-auth-retry-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const name of ['yt-dlp.exe', 'yt-dlp', 'ffmpeg.exe', 'ffmpeg']) fs.writeFileSync(path.join(root, name), '');
+  let revision = 'old-login'; const attempts = [];
+  const youtubeSession = { status: () => ({ supported: true, configured: true, revision }), lease: () => ({ args: [], dispose() {} }) };
+  const spawnProcess = (_exe, args) => {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => child.emit('close', 1);
+    const id = new URL(args.at(-1)).searchParams.get('v'); attempts.push(id); assert.ok(args.includes('--sleep-interval'));
+    setImmediate(() => {
+      if (id === 'o7hCv63iWoo' && revision === 'old-login') { child.stderr.write("Sign in to confirm you're not a bot"); child.emit('close', 1); return; }
+      fs.writeFileSync(path.join(path.dirname(args[args.indexOf('-o') + 1]), `fixture-${id}.mp3`), 'fixture audio'); child.emit('close', 0);
+    }); return child;
+  };
+  const create = () => createDownloadService({ toolsDir: root, outputDir: path.join(root, 'downloads'), youtubeSession, spawnProcess, metadataProcess: copyMetadataFixture, fetchImpl: noCoverFetch });
+  let service = create();
+  try {
+    let connection = await service.connect();
+    const started = service.startJob(['BaW_jenozKc', 'o7hCv63iWoo', 'abcdefgh123'].map((id) => ({ title: id, url: `https://www.youtube.com/watch?v=${id}` })));
+    const partial = await settledJob(connection, started.id);
+    assert.equal(partial.completed, 1); assert.equal(partial.failures.length, 2); assert.deepEqual(attempts, ['BaW_jenozKc', 'o7hCv63iWoo']);
+    assert.ok(partial.failures.every((failure) => failure.youtubeAuthRevision === 'old-login'));
+    service.dispose(); service = create(); connection = await service.connect();
+    const post = (input) => fetch(`${connection.url}/jobs/${started.id}/retry`, { method: 'POST', headers: { Authorization: `Bearer ${connection.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    assert.equal((await post({})).status, 400);
+    assert.equal((await post({ youtubeAuthRevision: 'forged-login' })).status, 400);
+    const status = await (await fetch(`${connection.url}/status`, { headers: { Authorization: `Bearer ${connection.token}` } })).json();
+    assert.deepEqual(status.youtubeAuth, youtubeSession.status());
+    revision = 'new-login'; assert.equal((await post({})).status, 200);
+    const complete = await settledJob(connection, started.id);
+    assert.equal(complete.state, 'complete'); assert.equal(complete.completed, 3); assert.equal(complete.failures.length, 0);
+    assert.deepEqual(attempts, ['BaW_jenozKc', 'o7hCv63iWoo', 'o7hCv63iWoo', 'abcdefgh123']);
+    assert.equal(fs.readFileSync(path.join(root, 'downloads', started.id, partial.files[0].name), 'utf8'), 'ID3\u0003\u0000\u0000\u0000\u0000\u0000\u0000fixture audio');
+  } finally { service.dispose(); }
+});
+
 test('source validation normalizes links and rejects hosts, protocols and injection', () => {
   assert.equal(parseSource('https://music.youtube.com/playlist?list=PLajX1VL9dSWQ').url, 'https://www.youtube.com/playlist?list=PLajX1VL9dSWQ');
   assert.equal(parseSource('https://youtu.be/o7hCv63iWoo').url, 'https://www.youtube.com/watch?v=o7hCv63iWoo');

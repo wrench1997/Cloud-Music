@@ -3,6 +3,7 @@ const { createGoogleAuth } = require('./google-auth');
 const { createMusicTray } = require('./tray');
 const { attachYouTubeEmbedIdentity } = require('./youtube-embed');
 const { createMusicCache } = require('./music-cache');
+const { createYoutubeDownloadSession } = require('./youtube-download-session');
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
@@ -16,6 +17,9 @@ let downloadService;
 let appUpdater;
 let musicCache;
 const googleAuth = createGoogleAuth({ app, shell, safeStorage, dialog, getWindow: () => mainWindow, getMusicCache: () => musicCache });
+const youtubeDownloadSession = createYoutubeDownloadSession({ directory: app.getPath('userData'), safeStorage, dialog, shell, getWindow: () => mainWindow, requireIdle: () => {
+  if (downloadService?.isBusy()) throw new Error('请等当前下载任务完成或取消后，再更改 YouTube 登录。');
+} });
 // 支持的音频格式：MP3, WAV, FLAC, OGG, M4A, AAC, WMA, APE, DSD, AIFF, ALAC, OPUS, AMR
 const supportedAudioExtensions = new Set([
   '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac',
@@ -184,6 +188,7 @@ app.on('before-quit', () => {
   musicTray?.destroy();
   googleAuth.dispose();
   downloadService?.dispose();
+  youtubeDownloadSession.dispose();
   appUpdater?.dispose();
   musicCache?.dispose();
 });
@@ -226,9 +231,18 @@ ipcMain.handle('downloads-connect', async (event, options) => {
     downloadService = createDownloadService({
       toolsDir: app.isPackaged ? path.join(process.resourcesPath, 'media-tools') : path.join(__dirname, '../.local/media-tools'),
       outputDir: path.join(app.getPath('downloads'), 'Yungan Music'),
+      youtubeSession: youtubeDownloadSession,
     });
   }
   return downloadService.connect({ lan: options?.lan === true });
+});
+
+for (const method of ['status', 'usePreview', 'importCookies', 'clear', 'open']) ipcMain.handle(`youtube-download-${method}`, async (event) => {
+  try {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('请在云感音乐主窗口管理下载登录。');
+    if (['usePreview', 'importCookies', 'clear'].includes(method) && downloadService?.isBusy()) throw new Error('请等当前下载任务完成或取消后，再更改 YouTube 登录。');
+    return { ok: true, data: await youtubeDownloadSession[method]() };
+  } catch (error) { return { ok: false, error: { message: error.message } }; }
 });
 
 ipcMain.handle('get-all-songs', () => {

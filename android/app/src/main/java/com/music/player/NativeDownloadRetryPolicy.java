@@ -16,6 +16,9 @@ final class NativeDownloadRetryPolicy {
 
     /** Returns new arrays only after every replacement and every remaining failure is validated. */
     static JSONObject prepare(JSONObject job, JSONObject input) throws Exception {
+        return prepare(job, input, "");
+    }
+    static JSONObject prepare(JSONObject job, JSONObject input, String youtubeAuthRevision) throws Exception {
         if (input == null) input = new JSONObject();
         for (Iterator<String> keys = input.keys(); keys.hasNext();) {
             if (!"replacements".equals(keys.next())) throw new IOException("重试只允许更换失败音源，不能更改歌曲信息或上传账号。");
@@ -75,6 +78,7 @@ final class NativeDownloadRetryPolicy {
             JSONObject failure = failures.getJSONObject(i); String url = storedUrl(failure.optString("url"));
             if (!pending.contains(url) || selected.containsKey(url)) continue;
             String reason = restrictionReason(failure.optString("error"));
+            if (!youtubeAuthRevision.isEmpty() && !youtubeAuthRevision.equals(failure.optString("youtubeAuthRevision")) && authenticationRequired(failure.optString("error"))) reason = "";
             if (!reason.isEmpty()) throw new IOException(reason + " 请为失败曲目选择其他可公开访问的音源后重试，已下载 MP3 保留。");
         }
 
@@ -99,14 +103,19 @@ final class NativeDownloadRetryPolicy {
         try { return canonicalUrl(value); } catch (IOException ignored) { return ""; }
     }
 
+    static boolean authenticationRequired(String message) {
+        String reason = restrictionReason(message);
+        return "此音源要求网页人机验证。".equals(reason) || "此音源需要另行登录认证。".equals(reason);
+    }
+
     /** Only access restrictions require a different source; temporary network/403 errors remain retryable. */
     static String restrictionReason(String error) {
         String text = error == null ? "" : error.toLowerCase(Locale.ROOT).replace('’', '\'');
-        if (text.matches("(?s).*(confirm your age|age[- ]restricted|age verification|年龄验证|年龄限制).*")) return "此音源需要年龄验证。";
-        if (text.matches("(?s).*(not a bot|confirm you.*not.*bot|机器人验证|人机验证).*")) return "此音源要求网页人机验证。";
-        if (text.matches("(?s).*(private video|video is private|members[- ]only|only available to.*members|channel members|join this channel|会员专享|私密视频).*")) return "此音源为私密或会员专享内容。";
-        if (text.matches("(?s).*(geo[- ]?restrict|geographic restriction|not available (in|from) your (country|region|location)|not made.*available in your (country|region)|blocked in your (country|region)|地区限制|区域限制).*")) return "此音源在当前地区不可用。";
-        if (text.matches("(?s).*(login required|log in required|requires login|authentication required|requires authentication|sign in to|sign in required|log in to|must be logged in|only available for registered users|需要登录|请先登录).*")) return "此音源需要另行登录认证。";
+        if (text.matches("(?s).*(confirm your age|age[- ]restricted|age verification|年龄|年齡).*")) return "此音源需要年龄验证。";
+        if (text.matches("(?s).*(private video|video is private|members[- ]only|members only|only available to.*members|channel members|join this channel|premium[- ]only|subscriber[- ]only|会员|會員|私密).*")) return "此音源为私密或会员专享内容。";
+        if (text.matches("(?s).*(geo[- ]?restrict|geographic restriction|not available (in|from) your (country|region|location)|not made.*available in your (country|region)|blocked in your (country|region)|地区|地區|区域限制).*")) return "此音源在当前地区不可用。";
+        if (text.matches("(?s).*(not a bot|confirm you.*not.*bot|captcha|机器人|機器人|人机验证).*")) return "此音源要求网页人机验证。";
+        if (text.matches("(?s).*(login required|log in|requires login|authentication required|requires authentication|sign in|must be logged in|only available for registered users|需要登录|需要登錄|请先登录).*")) return "此音源需要另行登录认证。";
         return "";
     }
 }

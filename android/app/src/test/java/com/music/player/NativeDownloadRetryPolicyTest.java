@@ -7,6 +7,24 @@ import java.io.IOException;
 import static org.junit.Assert.*;
 
 public class NativeDownloadRetryPolicyTest {
+    @Test public void changedLoginUnlocksOnlyAuthenticationFailuresAndKeepsDownloadedMusic() throws Exception {
+        JSONObject job = partialJob(), failure = job.getJSONArray("failures").getJSONObject(0);
+        failure.put("error", "Sign in to confirm you're not a bot").put("youtubeAuthRevision", "old-login");
+        String original = job.toString();
+        for (String revision : new String[]{"", "old-login"}) {
+            try { NativeDownloadRetryPolicy.prepare(job, new JSONObject(), revision); fail("unchanged login must remain blocked"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("人机验证")); }
+        }
+        JSONObject plan = NativeDownloadRetryPolicy.prepare(job, new JSONObject(), "new-login");
+        assertEquals(FAILED, plan.getJSONArray("sources").getJSONObject(11).getString("url")); assertEquals(original, job.toString());
+        assertEquals(11, job.getJSONArray("files").length());
+        rejectsWithoutMutation(job, new JSONObject().put("youtubeAuthRevision", "new-login"), "不能更改");
+        for (String error : new String[]{"Sign in to confirm your age", "Private video. Sign in", "Members only. Sign in", "Premium-only. Sign in", "not available in your region. Sign in", "Geo-restricted. Not a bot"}) {
+            failure.put("error", error); assertFalse(error, NativeDownloadRetryPolicy.authenticationRequired(error));
+            try { NativeDownloadRetryPolicy.prepare(job, new JSONObject(), "new-login"); fail("account login cannot unlock other access restrictions"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("已下载 MP3 保留")); }
+        }
+    }
     private static final String FAILED = "https://www.youtube.com/watch?v=yTLuE57Gvsc";
     private static final String REPLACEMENT = "https://www.youtube.com/watch?v=Zyxwvutsr01";
     private JSONObject partialJob() throws Exception {

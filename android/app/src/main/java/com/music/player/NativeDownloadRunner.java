@@ -37,6 +37,7 @@ final class NativeDownloadRunner {
         synchronized (store) { pending = uploadOnly ? new JSONArray() : NativeDownloadStore.pendingSources(job); if (!uploadOnly) job.put("failures", new JSONArray()); save(job); }
         for (int i = 0; i < pending.length() && !cancelled(job); i++) {
             JSONObject source = pending.getJSONObject(i);
+            String youtubeAuthRevision = engine.authenticationRevision();
             long[] lastProgress = {0}; String[] lastPhase = {""};
             try {
                 JSONObject file = engine.download(source, store.directory(id), id, (phase, percent) -> {
@@ -57,7 +58,14 @@ final class NativeDownloadRunner {
                 }
             } catch (Exception error) {
                 synchronized (store) {
-                    if (!cancelled(job)) job.getJSONArray("failures").put(new JSONObject(source.toString()).put("error", message(error)));
+                    if (!cancelled(job)) {
+                        job.getJSONArray("failures").put(new JSONObject(source.toString()).put("error", message(error)).put("youtubeAuthRevision", youtubeAuthRevision));
+                        if (NativeDownloadRetryPolicy.authenticationRequired(message(error))) {
+                            for (int remaining = i + 1; remaining < pending.length(); remaining++) job.getJSONArray("failures")
+                                .put(new JSONObject(pending.getJSONObject(remaining).toString()).put("error", message(error)).put("youtubeAuthRevision", youtubeAuthRevision));
+                            save(job); break;
+                        }
+                    }
                     save(job);
                 }
             }

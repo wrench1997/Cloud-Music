@@ -56,3 +56,19 @@ test('official single-video URLs normalize to the same source identity and rejec
   assert.equal(canonicalYoutubeSource('https://music.youtube.com/watch?v=new00000000&list=RDnew00000000'), replacement);
   for (const value of ['https://www.youtube.com/playlist?list=PLabcdefghij', 'https://www.youtube.com/redirect?v=new00000000', 'https://user:pass@www.youtube.com/watch?v=new00000000', 'https://www.youtube.com:444/watch?v=new00000000']) assert.throws(() => canonicalYoutubeSource(value));
 });
+
+test('only a changed download login unlocks an authentication failure, without replacing sources or downloaded files', () => {
+  const job = fixture(); job.failures[0].error = "Sign in to confirm you're not a bot"; job.failures[0].youtubeAuthRevision = 'old-login';
+  const originalState = JSON.stringify(job);
+  for (const auth of [{}, { configured: false, revision: 'new-login' }, { configured: true, revision: 'old-login' }]) {
+    assert.equal(downloadFailureReason(job.failures[0], auth).canRetry, false); assert.throws(() => prepareFailedDownloadRetry(job, {}, auth));
+  }
+  const auth = { configured: true, revision: 'new-login' };
+  assert.equal(downloadFailureReason(job.failures[0], auth).canRetry, true);
+  assert.deepEqual(prepareFailedDownloadRetry(job, {}, auth).pending, [job.sources[1]]);
+  assert.equal(JSON.stringify(job), originalState);
+  assert.throws(() => prepareFailedDownloadRetry(job, { youtubeAuthRevision: 'new-login' }, auth), /不能更改/);
+  for (const error of ['Sign in to confirm your age', 'Private video. Sign in', 'Members only. Sign in', 'premium-only. Sign in', 'not available in your region. Sign in', 'Geo-restricted. Not a bot']) {
+    job.failures[0].error = error; assert.equal(downloadFailureReason(job.failures[0], auth).canRetry, false); assert.throws(() => prepareFailedDownloadRetry(job, {}, auth));
+  }
+});
