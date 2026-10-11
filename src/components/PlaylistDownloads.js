@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { NativeDownloads, requestNativeDownload, authorizeNativeUpload } from '../lib/native-downloads';
 import { recommendSource } from '../lib/source-matching';
@@ -7,6 +7,7 @@ import { ACTIVE_STATES, normalizeDownloadJob, mergeDownloadJobs, downloadJobLabe
 import MusicDiscovery from './MusicDiscovery';
 import YoutubeDownloadLogin from './YoutubeDownloadLogin';
 import { downloadFailureReason, canonicalYoutubeSource, completedSourceUrls, replacementSearch } from '../lib/download-failure-policy';
+import { createPlaylistReader } from '../lib/playlist-reader';
 import styles from './PlaylistDownloads.module.css';
 
 export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUpload, onRepairUpload, onGoogleLogin, uploadAccount = '', uploadEmail = '', onPlayOriginal, onPlayDownloaded, onLibraryChanged, sourceRadio, sourceCatalog, active: viewActive = true, discoveryMode = false, taste, playlists, onShowDownloads, onShowPlaylist }) {
@@ -18,6 +19,15 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const [job, setJob] = useState(null);
   const [jobs, setJobs] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState('');
+  const [readRevision, setReadRevision] = useState(0);
+  const [inspectedKey, setInspectedKey] = useState('');
+  const [playlistReader] = useState(createPlaylistReader);
+  const [trackQuery, setTrackQuery] = useState('');
+  const deferredTrackQuery = useDeferredValue(trackQuery);
+  const [visibleCount, setVisibleCount] = useState(50);
+  const [focusJobId, setFocusJobId] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [autoUpload, setAutoUpload] = useState(true);
@@ -48,13 +58,15 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   const repairIntent = useRef(null);
   const autoUploadRef = useRef(autoUpload);
   const active = useRef(true);
+  const operationBusy = useRef(false);
+  const jobPanel = useRef(null);
+  const trackVersion = useRef(0);
+  useLayoutEffect(() => {
+    trackVersion.current += 1;
+    if (operationBusy.current?.trackAction) { operationBusy.current = false; Promise.resolve().then(() => setBusy(false)); }
+  }, [playlist?.key, playlistRevision, discoveredEntries, readRevision]);
   useEffect(() => { currentUpload.current = onUpload; currentRepairUpload.current = onRepairUpload; currentAccount.current = uploadAccount; currentEmail.current = uploadEmail; currentLibraryChanged.current = onLibraryChanged; autoUploadRef.current = autoUpload; }, [onUpload, onRepairUpload, uploadAccount, uploadEmail, onLibraryChanged, autoUpload]);
-  useEffect(() => {
-    const timer = setTimeout(() => { setEntries([]); setSelected({}); setCandidates({}); setNotice(''); setDiscoveredEntries(false); }, 0);
-    return () => clearTimeout(timer);
-  }, [playlist?.key, playlistRevision]);
-
-  const request = async (config, route, data, method) => {
+  const request = useCallback(async (config, route, data, method) => {
     if (!config) throw new Error('下载功能正在准备，请稍后重试。');
     if (config.native) return requestNativeDownload(route, data, method);
     const response = await fetch(`${config.url}${route}`, {
@@ -64,6 +76,49 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `请求失败 ${response.status}`);
     return result;
+  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => { setDiscoveredEntries(false); setTrackQuery(''); setVisibleCount(50); }, 0);
+    return () => clearTimeout(timer);
+  }, [playlist?.key, playlistRevision]);
+  useEffect(() => {
+    if (!viewActive || discoveryMode || discoveredEntries || !connection) return undefined;
+    let alive = true;
+    const key = playlist?.key;
+    Promise.resolve().then(async () => {
+      if (!alive) return;
+      setEntries([]); setSelected({}); setCandidates({}); setInspectedKey(''); setReadError(''); setNotice('');
+      if (!key) { setReading(false); return; }
+      setReading(true);
+      try {
+        const result = await playlistReader.read(key, () => request(connection, '/inspect', { url: playlist.url }));
+        if (!alive) return;
+        if (!Array.isArray(result?.entries)) { playlistReader.invalidate(key); throw new Error('歌单曲目未能正确读取，请重试。'); }
+        setEntries(result.entries); setCandidates(result.candidates || {}); setInspectedKey(key);
+        setSelected(result.selected || Object.fromEntries(result.entries.map((entry, index) => [index, Boolean(entry.url)])));
+        setNotice(result.notice || '');
+      } catch (failure) { if (alive) { setInspectedKey(key); setReadError(failure.message || '无法读取歌单，请重试。'); } }
+      finally { if (alive) setReading(false); }
+    });
+    return () => { alive = false; };
+  }, [connection, playlist?.key, playlist?.url, playlistRevision, readRevision, viewActive, discoveryMode, discoveredEntries, playlistReader, request]);
+  useEffect(() => {
+    if (inspectedKey && !discoveredEntries) playlistReader.update(inspectedKey, { entries, selected, candidates });
+  }, [inspectedKey, entries, selected, candidates, discoveredEntries, playlistReader]);
+  useEffect(() => {
+    if (!focusJobId || discoveryMode || !viewActive) return undefined;
+    const timer = setTimeout(() => {
+      jobPanel.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      setFocusJobId('');
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [focusJobId, discoveryMode, viewActive]);
+  useEffect(() => {
+    try { const saved = localStorage.getItem('yungan-download-auto-upload'); if (saved !== null) Promise.resolve().then(() => setAutoUpload(saved === 'true')); } catch {}
+  }, []);
+  const changeAutoUpload = (checked) => {
+    setAutoUpload(checked);
+    try { localStorage.setItem('yungan-download-auto-upload', String(checked)); } catch {}
   };
   const receiveJobs = (values, selectId) => {
     const next = mergeDownloadJobs(currentJobs.current, values);
@@ -81,7 +136,6 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     if (!status.ready) throw new Error(status.error || (config.native ? '下载功能暂时未能准备好，请重试。' : '下载组件尚未准备好，请联系应用管理员安装下载组件。'));
     setConnection(config);
     if (status.jobs?.length) receiveJobs(status.jobs);
-    setNotice(config.native ? '' : config.integrated ? '下载功能已就绪。' : '下载服务已连接。');
   };
   const connectAutomatically = async () => {
     setConnecting(true); setError('');
@@ -137,7 +191,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       finally { inFlight = false; }
     }, 4000);
     return () => { alive = false; clearInterval(timer); };
-  }, [connection]);
+  }, [connection, request]);
 
   const fetchFile = async (config, task, file) => {
     if (config.native) {
@@ -223,7 +277,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     };
     resumeUploads();
     return () => { alive = false; };
-  }, [connection, jobs, autoUpload, uploadAccount, uploadEmail]);
+  }, [connection, jobs, autoUpload, uploadAccount, uploadEmail, request]);
   useEffect(() => {
     if (!connection || connection.native || !runningJob) return undefined;
     let inFlight = false;
@@ -246,10 +300,14 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     return () => { alive = false; clearInterval(timer); };
   }, [connection, runningJob?.id, runningJob?.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const perform = async (action) => {
-    setBusy(true); setError('');
-    try { await action(); } catch (requestError) { setError(requestError.message); }
-    finally { setBusy(false); }
+  const perform = async (action, trackAction = false) => {
+    if (operationBusy.current) return;
+    const operation = { trackAction, version: trackVersion.current };
+    operationBusy.current = operation;
+    setBusy(true); setError(''); setNotice('');
+    try { await action(); }
+    catch (requestError) { if (active.current && operationBusy.current === operation) setError(requestError.message); }
+    finally { if (operationBusy.current === operation) { operationBusy.current = false; if (active.current) setBusy(false); } }
   };
   const connectAndUpload = (task) => perform(async () => {
     if (!onGoogleLogin) throw new Error('暂时无法连接 Google 账号，本机 MP3 已保留。');
@@ -262,16 +320,17 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
     } catch (requestError) { setTransfer('本机 MP3 已保留，可以稍后重新确认授权并上传。'); throw requestError; }
     finally { manualCloudJobs.current.delete(task.id); }
   });
-  const inspect = () => perform(async () => {
-    const result = await request(connection, '/inspect', { url: playlist.url });
-    setEntries(result.entries); setCandidates({}); setDiscoveredEntries(false); onShowPlaylist?.();
-    setSelected(Object.fromEntries(result.entries.map((entry, index) => [index, Boolean(entry.url)])));
-    setNotice(`${result.title} · ${result.entries.length} 首。${result.notice || ''}`);
-  });
+  const inspect = () => {
+    if (!playlist) return;
+    playlistReader.invalidate(playlist.key); setReadRevision((value) => value + 1);
+    setDiscoveredEntries(false); setTrackQuery(''); setVisibleCount(50); onShowPlaylist?.();
+  };
   const match = (entry, index) => perform(async () => {
+    const version = trackVersion.current;
     const result = await request(connection, '/match', entry);
+    if (version !== trackVersion.current) return;
     setCandidates((value) => ({ ...value, [index]: result }));
-  });
+  }, true);
   const failureKey = (task, failure) => `${task.id}:${failure.url}`;
   const findFailureSource = (task, failure) => perform(async () => {
     const search = replacementSearch(failure);
@@ -301,19 +360,23 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       metadataProvider: entry.metadataProvider, spotifyId: entry.spotifyId,
     })), ...(connection.native ? { cloud: nativeCloudConfig(autoUploadRef.current, currentAccount.current, currentEmail.current) } : {}) });
     selectJob(result);
-    onShowDownloads?.();
+    setFocusJobId(result.id);
+    onShowDownloads?.({ fromDiscovery: discoveryMode || discoveredEntries });
   };
   const downloadDiscovered = async (tracks) => {
     await startDownload(tracks);
-    setEntries(tracks); setCandidates({}); setSelected(Object.fromEntries(tracks.map((entry, index) => [index, Boolean(entry.url)])));
-    setDiscoveredEntries(true); setNotice('已开始下载所选发现歌曲，音源来自 YouTube。'); onShowDownloads?.();
+    setEntries(tracks); setCandidates({}); setInspectedKey(''); setSelected(Object.fromEntries(tracks.map((entry, index) => [index, Boolean(entry.url)])));
+    setDiscoveredEntries(true); setReading(false); setReadError(''); setNotice('已开始下载所选发现歌曲，音源来自 YouTube。'); onShowDownloads?.({ fromDiscovery: true });
   };
   const chooseSpotifyDiscovery = (track) => perform(async () => {
+    const version = trackVersion.current;
     const result = await request(connection, '/match', track);
-    setEntries([track]); setCandidates({ 0: result }); setSelected({}); setDiscoveredEntries(true);
-    setNotice('已读取 Spotify 曲目。请选择并核对一个 YouTube 音源，再下载 MP3。'); onShowDownloads?.();
-  });
+    if (version !== trackVersion.current) return;
+    setEntries([track]); setCandidates({ 0: result }); setInspectedKey(''); setSelected({}); setDiscoveredEntries(true); setReading(false); setReadError('');
+    setNotice('已读取 Spotify 曲目。请选择并核对一个 YouTube 音源，再下载 MP3。'); onShowDownloads?.({ fromDiscovery: true });
+  }, true);
   const matchAll = () => perform(async () => {
+    const version = trackVersion.current;
     const next = [...entries];
     const nextSelection = { ...selected };
     let matched = 0;
@@ -321,6 +384,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       if (!next[index].search || next[index].url) continue;
       setNotice(`正在匹配 ${index + 1} / ${next.length}：${next[index].title}`);
       const result = await request(connection, '/match', next[index]);
+      if (version !== trackVersion.current) return;
       const recommendation = recommendSource(next[index], result);
       if (recommendation) {
         next[index] = { ...next[index], url: recommendation.url, coverUrl: next[index].coverUrl || recommendation.coverUrl, matched: true };
@@ -330,7 +394,15 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
       setEntries([...next]); setSelected({ ...nextSelection });
     }
     setNotice(`已推荐 ${matched} 个音源。请核对版本，再点击下载；未匹配的曲目可手动选择。`);
-  });
+  }, true);
+
+  const currentTracks = discoveredEntries || Boolean(playlist && inspectedKey === playlist.key);
+  const loadingTracks = reading || Boolean(playlist && !discoveredEntries && !currentTracks);
+  const readyTracks = currentTracks ? entries.filter((entry) => entry.url) : [];
+  const selectedCount = currentTracks ? entries.filter((entry, index) => selected[index] && entry.url).length : 0;
+  const filteredTracks = (currentTracks ? entries : []).map((entry, index) => ({ entry, index })).filter(({ entry }) =>
+    !deferredTrackQuery.trim() || `${entry.title || ''} ${entry.artist || ''}`.toLowerCase().includes(deferredTrackQuery.trim().toLowerCase()));
+  const showJob = (task) => { if (task?.id) selectJob(task); jobPanel.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); };
   const saveFile = (file, task = job) => perform(async () => {
     if (connection.native) {
       const result = await NativeDownloads.saveFile({ jobId: task.id, fileName: file.name });
@@ -363,41 +435,49 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
   return <section className="download-panel" aria-label="下载 MP3 并上传云端">
     <div hidden={!discoveryMode}><MusicDiscovery taste={taste} playlists={playlists} incomingRadio={sourceRadio} incomingCatalog={sourceCatalog} viewActive={viewActive && discoveryMode} available={Boolean(connection)} catalogAvailable={Boolean(catalogConnection)} canDownload={Boolean(connection) && !busy && (connection.native || !runningJob)} onCatalog={(value) => request(catalogConnection, '/catalog', value)} onSearch={(value) => request(connection, '/search', value)} onRadio={(value) => request(connection, '/radio', value)} onMatchTrack={(track) => request(connection, '/match', track)} onInspectSpotify={(url) => request(connection, '/inspect', { url })} onDownload={downloadDiscovered} onChooseSpotifyTrack={chooseSpotifyDiscovery} /></div>
     <div hidden={discoveryMode && catalogConnection && !jobs.length && !entries.length}>
-    <h2>{discoveryMode ? '下载与保存' : '下载 MP3 · 云端保存'}</h2>
-    {!discoveryMode && !playlist && !discoveredEntries && <p>先在上方粘贴歌单链接并导入，或从“我的歌单”选择一个歌单，也可以在“发现音乐”搜索歌曲。</p>}
-    {!discoveryMode && !discoveredEntries && playlist?.provider === 'spotify' && <div className="download-actions" role="group" aria-label="Spotify 原平台播放">
-      <button className="config-button" onClick={onPlayOriginal}>在 Spotify 原平台播放 ↗</button>
-    </div>}
-    {!discoveryMode && playlist?.provider === 'spotify' && <p>下载来源：YouTube。导入 Spotify 曲目后匹配音源，请核对歌曲版本。</p>}
-    {!connection && <p>{connecting ? '正在准备下载功能…' : <button className="outline-button" onClick={connectAutomatically}>重试准备下载</button>}</p>}
+    {!discoveryMode && <div className={styles.listHeading}><h2>选择歌曲 {currentTracks && entries.length > 0 && <small>{entries.length} 首</small>}</h2>{playlist && !discoveredEntries && <div><button className={styles.textButton} onClick={onPlayOriginal}>原平台试听 ↗</button><button className={styles.textButton} disabled={!connection || busy || loadingTracks} onClick={inspect} aria-label="刷新歌单曲目">刷新</button></div>}</div>}
+    {!discoveryMode && !playlist && !discoveredEntries && <div className={styles.empty}><span aria-hidden="true">♫</span><b>添加一个喜欢的歌单</b><p>粘贴上方链接，歌曲会自动出现在这里。</p></div>}
+    {!connection && <p role="status">{connecting ? '正在准备下载功能…' : <button className="outline-button" onClick={connectAutomatically}>重试准备下载</button>}</p>}
     {connection && <>
-      <YoutubeDownloadLogin auth={youtubeAuth} onChange={setYoutubeAuth} blocked={Boolean(runningJob)} requested={youtubeLoginRequested} attention={job?.failures?.some((failure) => ['verification', 'login'].includes(downloadFailureReason(failure).code))} />
-      {typeof window !== 'undefined' && window.electronAPI?.downloads && <div><button className="outline-button" onClick={() => perform(async () => {
-        const result = await window.electronAPI.downloads.connect({ lan: true }); setMobileLinks(result.pairingLinks);
-      })}>开启手机连接</button>{mobileLinks.map((pairingLink) => <p key={pairingLink}><code>{pairingLink}</code><button onClick={() => perform(() => navigator.clipboard.writeText(pairingLink))}>复制配对链接</button></p>)}</div>}
-      {!discoveryMode && <div className="download-actions"><button className="outline-button" disabled={busy || !playlist} onClick={inspect}>{busy ? '正在读取 / 搜索…' : '读取歌单曲目'}</button>
-        {entries.some((entry) => entry.search) && <button className="outline-button" disabled={busy} onClick={matchAll}>批量匹配 YouTube 音源</button>}
-        <button className="red-button" disabled={busy || (!connection.native && runningJob) || !entries.some((entry, index) => selected[index] && entry.url)} onClick={() => perform(() => startDownload(entries.filter((entry, index) => selected[index] && entry.url)))}>下载所选为 MP3</button>
-        <label><input type="checkbox" checked={autoUpload && (!connection.native || Boolean(uploadAccount))} disabled={connection.native && !uploadAccount} onChange={(event) => setAutoUpload(event.target.checked)} /> {connection.native && !uploadAccount ? '自动上传 Drive（需连接账号）' : '完成后自动上传 Drive'}</label>
-      </div>}
-      {discoveryMode && <div className="download-actions"><label><input type="checkbox" checked={autoUpload && (!connection.native || Boolean(uploadAccount))} disabled={connection.native && !uploadAccount} onChange={(event) => setAutoUpload(event.target.checked)} /> {connection.native && !uploadAccount ? '自动上传 Drive（需连接账号）' : '下载完成后自动上传 Drive'}</label>{jobs.some((task) => ACTIVE_STATES.has(task.state)) && <button className="outline-button" onClick={onShowDownloads}>查看正在下载的任务</button>}</div>}
-      {uploadAccount && <p>上传账号：{uploadEmail || '已验证的 Google 账号'}</p>}
-      {!uploadAccount && <p>MP3 可以先保存到设备。<button className="config-button" onClick={onGoogleLogin}>连接 Google Drive 后上传</button></p>}
-      {!discoveryMode && entries.length > 0 && <div className="download-track-list">{entries.map((entry, index) => <div className="download-track" key={`${index}:${entry.title}`}>
-        <label><input type="checkbox" checked={Boolean(selected[index])} disabled={!entry.url} onChange={(event) => setSelected((value) => ({ ...value, [index]: event.target.checked }))} /><span><b>{entry.title}</b><small>{entry.artist}{entry.matched ? ' · 已匹配 YouTube 音源' : ''}</small></span></label>
-        {entry.search && <button disabled={busy} onClick={() => match(entry, index)}>查找 YouTube 音源</button>}
+      {!discoveryMode && runningJob && <div className={styles.activity} role="status"><span><i className={styles.spinner} />正在下载 · {runningJob.completed} / {runningJob.total} 首</span><button className={styles.textButton} onClick={() => showJob(runningJob)}>查看任务 ↓</button></div>}
+      {!discoveryMode && ((currentTracks && entries.length > 0) || loadingTracks) && <>
+        <div className={styles.selectionBar}>
+          <label><input type="checkbox" aria-label="全选可下载歌曲" checked={readyTracks.length > 0 && selectedCount === readyTracks.length} ref={(element) => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < readyTracks.length; }} disabled={busy || loadingTracks || !readyTracks.length} onChange={(event) => setSelected(Object.fromEntries(entries.map((entry, index) => [index, Boolean(entry.url) && event.target.checked])))} />全选 <small>已选 {selectedCount} 首</small></label>
+          <div>{currentTracks && entries.some((entry) => entry.search && !entry.url) && <button className="outline-button" disabled={busy || loadingTracks} onClick={matchAll}>{busy ? '匹配中…' : '匹配音源'}</button>}<button className="red-button" disabled={busy || loadingTracks || (!connection.native && Boolean(runningJob)) || !selectedCount} onClick={() => perform(() => startDownload(entries.filter((entry, index) => selected[index] && entry.url)))}>{loadingTracks ? '读取中…' : busy ? <><i className={styles.spinner} />处理中…</> : !connection.native && runningJob ? '下载中…' : selectedCount ? `下载 ${selectedCount} 首 MP3` : '选择歌曲下载'}</button></div>
+        </div>
+        {!discoveredEntries && playlist?.provider === 'spotify' && <p className={styles.sourceHint}>下载音源来自 YouTube，匹配后可试听核对版本。</p>}
+        {currentTracks && entries.length > 5 && <div className={styles.trackSearch}><span aria-hidden="true">⌕</span><input aria-label="筛选歌单歌曲" value={trackQuery} onChange={(event) => { setTrackQuery(event.target.value); setVisibleCount(50); }} placeholder="搜索歌名或歌手" />{trackQuery && <><button className={styles.onlyMatches} disabled={busy || loadingTracks || trackQuery !== deferredTrackQuery || !filteredTracks.some(({ entry }) => entry.url)} onClick={() => { const indexes = new Set(filteredTracks.filter(({ entry }) => entry.url).map(({ index }) => index)); setSelected(Object.fromEntries(entries.map((entry, index) => [index, indexes.has(index)]))); }}>只选结果</button><button aria-label="清空歌曲搜索" onClick={() => setTrackQuery('')}>×</button></>}</div>}
+        {busy && notice && <p className={styles.sourceHint} role="status">{notice}</p>}
+      </>}
+      {!discoveryMode && loadingTracks && <div className={styles.skeleton} role="status" aria-label="正在读取歌单曲目"><p><i className={styles.spinner} />正在读取歌单…</p>{[0, 1, 2].map((key) => <div key={key}><i /><span /><span /></div>)}</div>}
+      {!discoveryMode && currentTracks && readError && <div className={styles.readError} role="alert"><span>{readError}</span><button className="outline-button" onClick={inspect}>重新读取</button></div>}
+      {!discoveryMode && currentTracks && !reading && inspectedKey && !entries.length && !readError && <p className={styles.empty}>这个歌单暂时没有可读取的歌曲。</p>}
+      {!discoveryMode && currentTracks && !reading && entries.length > 0 && <div className={`download-track-list ${styles.trackList}`} aria-label="歌单曲目">{filteredTracks.slice(0, visibleCount).map(({ entry, index }) => <div className={`download-track ${selected[index] ? styles.selectedTrack : ''}`} key={`${index}:${entry.title}`}>
+        <label><input type="checkbox" checked={Boolean(selected[index])} disabled={!entry.url || busy} onChange={(event) => setSelected((value) => ({ ...value, [index]: event.target.checked }))} /><span><b>{entry.title}</b><small>{entry.artist}{entry.matched ? ' · YouTube 音源' : ''}</small></span></label>
+        {entry.search && <button disabled={busy} onClick={() => match(entry, index)}>{entry.url ? '更换音源' : '选择音源'}</button>}
         {entry.url && <a href={entry.url} target="_blank" rel="noopener noreferrer">核对音源 ↗</a>}
-        {candidates[index] && <div className="download-candidates">{candidates[index].map((candidate) => <div key={candidate.url}><span>{candidate.title} · {candidate.artist} · {Math.round(candidate.duration / 60)} 分钟</span><a href={candidate.url} target="_blank" rel="noopener noreferrer">试听 ↗</a><button onClick={() => {
+        {candidates[index] && <div className="download-candidates">{candidates[index].map((candidate) => <div key={candidate.url}><span>{candidate.title} · {candidate.artist} · {Math.round(candidate.duration / 60)} 分钟</span><a href={candidate.url} target="_blank" rel="noopener noreferrer">试听 ↗</a><button disabled={busy} onClick={() => {
           setEntries((value) => value.map((item, position) => position === index ? { ...item, url: candidate.url, coverUrl: item.coverUrl || candidate.coverUrl, matched: true } : item));
           setSelected((value) => ({ ...value, [index]: true })); setCandidates((value) => ({ ...value, [index]: null }));
         }}>使用这个音源</button></div>)}</div>}
-      </div>)}</div>}
+      </div>)}{!filteredTracks.length && <p className={styles.empty}>没有找到匹配的歌曲</p>}{filteredTracks.length > visibleCount && <button className={styles.showMore} onClick={() => setVisibleCount((value) => value + 50)}>显示更多歌曲 · 还有 {filteredTracks.length - visibleCount} 首</button>}</div>}
+      {discoveryMode && jobs.some((task) => ACTIVE_STATES.has(task.state)) && <button className="outline-button" onClick={onShowDownloads}>查看正在下载的任务</button>}
+      <div className={styles.utilities}>
+        <YoutubeDownloadLogin auth={youtubeAuth} onChange={setYoutubeAuth} blocked={Boolean(runningJob)} requested={youtubeLoginRequested} attention={job?.failures?.some((failure) => ['verification', 'login'].includes(downloadFailureReason(failure).code))} />
+        <details className={styles.saveSettings}><summary>保存设置 <span>{autoUpload && uploadAccount ? '本机 + Drive' : '保存到本机'}</span></summary>
+          <label><input type="checkbox" checked={autoUpload && Boolean(uploadAccount)} disabled={!uploadAccount} onChange={(event) => changeAutoUpload(event.target.checked)} />下载完成后同步到 Google Drive</label>
+          {uploadAccount ? <p>{uploadEmail || '已验证的 Google 账号'}</p> : <button className="config-button" onClick={onGoogleLogin}>连接 Google Drive</button>}
+          {typeof window !== 'undefined' && window.electronAPI?.downloads && <details className={styles.mobileConnection}><summary>连接其他设备</summary><button className="outline-button" disabled={busy} onClick={() => perform(async () => {
+            const result = await window.electronAPI.downloads.connect({ lan: true }); setMobileLinks(result.pairingLinks || []);
+          })}>开启手机连接</button>{mobileLinks.map((pairingLink) => <p key={pairingLink}><code>{pairingLink}</code><button className={styles.textButton} onClick={() => perform(() => navigator.clipboard.writeText(pairingLink))}>复制链接</button></p>)}</details>}
+        </details>
+      </div>
       {!discoveryMode && jobs.length > 0 && <section className="download-task-list" aria-label="下载任务">
         <h3>下载任务 <small>{jobs.length}</small></h3>
         {connection.native && jobs.some((task) => ACTIVE_STATES.has(task.state) || cloudPhase(task.cloud) === 'uploading') && <p role="status">下载和上传会在后台继续，可以返回曲库听歌。</p>}
         {jobs.length > 1 && <div className="download-actions" role="group" aria-label="选择下载任务">{jobs.map((task) => <button className="outline-button" key={task.id} aria-pressed={job?.id === task.id} onClick={() => selectJob(task)}>{task.title || '歌曲下载'} · {downloadJobLabel(task)} · {task.completed} / {task.total}</button>)}</div>}
       </section>}
-      {!discoveryMode && job && <div className="download-job"><p>{downloadJobLabel(job)}{ACTIVE_STATES.has(job.state) && job.title ? `：${job.title}` : ''}{ACTIVE_STATES.has(job.state) ? ` · ${job.progress}%` : ` · 已完成 ${job.completed} / ${job.total}`}</p>{job.state !== 'failed' && <progress aria-label="下载进度" value={job.progress} max="100" />}
+      {!discoveryMode && job && <div className={`download-job ${styles.jobPanel}`} ref={jobPanel}><p>{downloadJobLabel(job)}{ACTIVE_STATES.has(job.state) && job.title ? `：${job.title}` : ''}{ACTIVE_STATES.has(job.state) ? ` · ${job.progress}%` : ` · 已完成 ${job.completed} / ${job.total}`}</p>{job.state !== 'failed' && <progress aria-label="下载进度" value={job.progress} max="100" />}
         {ACTIVE_STATES.has(job.state) && <button className="outline-button" disabled={busy} onClick={() => perform(async () => receiveJobs([await request(connection, `/jobs/${job.id}`, null, 'DELETE')]))}>取消下载</button>}
         {Boolean(job.failures?.length) && !ACTIVE_STATES.has(job.state) && <section className={styles.failures} aria-label="未完成曲目">
           <h3>还有 {job.failures.length} 首未完成</h3><p>已下载的 {job.completed} 首会保留。更换音源会保留原歌曲名称、歌手和封面。</p>
@@ -439,7 +519,7 @@ export default function PlaylistDownloads({ playlist, playlistRevision = 0, onUp
         {job.files.map((file) => <div className="download-file" key={file.name}><span title={file.name}>{file.metadata?.title || file.name}{file.metadata?.artist ? ` · ${file.metadata.artist}` : ''} · {(Number(file.size) / 1024 / 1024 || 0).toFixed(1)} MB{connection.native && file.cloud && <small>{cloudStatusLabel(file.cloud)}{file.cloud.error ? ` · ${file.cloud.error}` : ''}</small>}</span><div className="download-actions">{onPlayDownloaded && <button className="red-button" disabled={busy} onClick={() => playDownloaded(file)}>立即播放</button>}<button className="outline-button" disabled={busy || (!connection.native && job.state === 'running')} onClick={() => saveFile(file)}>{connection.native ? '保存到音乐目录' : '保存 MP3'}</button></div></div>)}
       </div>}
     </>}
-    {notice && <p role="status">{notice}</p>}{transfer && <p role="status">{transfer}</p>}{error && <p className="login-error" role="alert">{error}</p>}
+    {notice && !busy && <p role="status">{notice}</p>}{transfer && <p role="status">{transfer}</p>}{error && <p className="login-error" role="alert">{error}</p>}
     </div>
   </section>;
 }

@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { STORAGE_KEY, MAX_PLAYLISTS, parsePlaylistLink, normalizePlaylists } from '../lib/online-playlists';
 import PlaylistDownloads from './PlaylistDownloads';
 import styles from './PlaylistWorkspace.module.css';
 
-export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onGoogleLogin, onPlayDownloaded, onLibraryChanged, uploadAccount, uploadEmail, taste, initialMode = 'download', mode: controlledMode, active = true, onModeChange, sourceRadio, sourceCatalog }) {
+function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onGoogleLogin, onPlayDownloaded, onLibraryChanged, uploadAccount, uploadEmail, taste, initialMode = 'download', mode: controlledMode, active = true, onModeChange, sourceRadio, sourceCatalog }) {
   const [playlists, setPlaylists] = useState([]);
   const [selected, setSelected] = useState(null);
   const [link, setLink] = useState('');
@@ -43,7 +43,11 @@ export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onG
     catch { setNotice('本机存储不可用，本次可以播放，关闭后歌单可能丢失。'); }
     setPlaylists(next);
   };
-  const choose = (playlist) => { setSelected(playlist); setLoaded(false); setNotice(''); setRetry((value) => value + 1); setSelectionRevision((value) => value + 1); setDownloadFromDiscovery(false); changeMode('download'); };
+  const choose = (playlist) => {
+    setSelected(playlist); changeMode('download');
+    if (selected?.key === playlist.key && !downloadFromDiscovery) return;
+    setLoaded(false); setNotice(''); setRetry((value) => value + 1); setSelectionRevision((value) => value + 1); setDownloadFromDiscovery(false);
+  };
   const changeMode = (nextMode) => {
     setInternalMode(nextMode); onModeChange?.(nextMode); setNotice('');
     if (nextMode === 'playback') { setLoaded(false); setRetry((value) => value + 1); }
@@ -60,30 +64,27 @@ export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onG
       setLink(''); setName('');
     } catch (requestError) { setError(requestError.message); }
   };
-  return <main className="online-page" hidden={!active}>
-    <header className="online-header"><div><span className="eyebrow">YUNGAN MUSIC</span><h1>{mode === 'discover' ? '发现音乐' : mode === 'playback' ? '原平台试听' : '下载与保存'}</h1></div><button className="outline-button" onClick={mode === 'playback' ? () => changeMode('download') : onClose}>{mode === 'playback' ? '返回下载' : '返回曲库'}</button></header>
-    <p className="online-intro">{mode === 'discover' ? '查看其他歌手的新歌与专辑，试听后选择音源下载。' : mode === 'playback' ? '使用平台播放器核对歌曲版本。' : '导入歌单、下载 MP3，保存到本机并同步至云端。'}</p>
+  return <main className={`online-page ${styles.page}`} hidden={!active}>
+    <header className={`online-header ${styles.header}`}><div><span className="eyebrow">YUNGAN MUSIC</span><h1>{mode === 'discover' ? '发现音乐' : mode === 'playback' ? '原平台试听' : '下载音乐'}</h1></div><button className="outline-button" onClick={mode === 'playback' ? () => changeMode('download') : onClose}>{mode === 'playback' ? '返回下载' : '返回曲库'}</button></header>
+    <p className={`online-intro ${styles.intro}`}>{mode === 'discover' ? '找到其他歌手的新歌与专辑。' : mode === 'playback' ? '使用平台播放器核对歌曲版本。' : '粘贴歌单链接，选好歌曲就能下载。'}</p>
     {mode === 'download' && <section className={styles.importCard} aria-label="导入歌单">
-    <div className={styles.importHeading}><span aria-hidden="true">↓</span><div><h2>导入歌单</h2><p>支持 Spotify 与 YouTube Music 分享链接</p></div></div>
     <form className="online-form" onSubmit={add}>
-      <label htmlFor="playlist-link">歌单链接<input id="playlist-link" type="url" value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://open.spotify.com/playlist/… 或 https://music.youtube.com/playlist?list=…" required maxLength={2048} /></label>
-      <button className="red-button" disabled={!ready || !link.trim()}>导入歌单</button>
-      <details className={styles.optionalName}><summary>给歌单起个名字（可选）</summary><label htmlFor="playlist-name">歌单名称<input id="playlist-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：通勤音乐" maxLength={80} /></label></details>
+      <label htmlFor="playlist-link"><span className={styles.linkLabel}>歌单链接</span><input id="playlist-link" type="url" value={link} onChange={(event) => setLink(event.target.value)} placeholder="粘贴 Spotify / YouTube Music 歌单链接" required maxLength={2048} autoComplete="off" spellCheck="false" /></label>
+      <button className="red-button" disabled={!ready || !link.trim()}>添加歌单</button>
     </form>
+    <div className={styles.importMeta}><span>Spotify · YouTube Music</span><details className={styles.optionalName}><summary>歌单名称（可选）</summary><label htmlFor="playlist-name">歌单名称<input id="playlist-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：通勤音乐" maxLength={80} /></label></details></div>
     {error && <p className="login-error" role="alert">{error}</p>}{notice && <p className="setup-message" role="status">{notice}</p>}
     </section>}
-    <div className={`online-layout ${styles.workspace} ${mode !== 'download' ? styles.singleColumn : ''}`}>
-      {mode === 'download' && <section className={`online-saved ${styles.saved}`} aria-label="已保存的歌单"><h2>已保存歌单 <small>{playlists.length}</small></h2>
-        {!playlists.length && <p className="online-empty">到平台歌单页面，选择“分享 / 复制链接”后添加。</p>}
-        {playlists.map((playlist) => <div className={`online-item${selected?.key === playlist.key ? ' selected' : ''}`} key={playlist.key}>
-          <button onClick={() => choose(playlist)} aria-pressed={selected?.key === playlist.key}><span className={`provider-dot ${playlist.provider}`} /><span><b>{playlist.name}</b><small>{playlist.provider === 'spotify' ? 'Spotify' : 'YouTube Music'}</small></span></button>
-          <button className="online-remove" aria-label={`移除 ${playlist.name}`} onClick={() => { if (selected?.key === playlist.key) setSelected(null); save(playlists.filter((item) => item.key !== playlist.key)); }}>×</button>
-        </div>)}<p className="online-local">链接保存在这台设备，不会上传到 Google Drive。</p>
+    <div className={`online-layout ${styles.workspace}`}>
+      {mode === 'download' && playlists.length > 0 && <section className={styles.saved} aria-label="已保存的歌单"><h2>我的歌单 <small>{playlists.length}</small></h2>
+        <div className={styles.playlistRail}>{playlists.map((playlist) => <div className={`online-item ${styles.playlistItem}${selected?.key === playlist.key && !downloadFromDiscovery ? ' selected' : ''}`} key={playlist.key}>
+          <button onClick={() => choose(playlist)} aria-pressed={selected?.key === playlist.key && !downloadFromDiscovery}><span className={`provider-dot ${playlist.provider}`} /><span><b>{playlist.name}</b><small>{playlist.provider === 'spotify' ? 'Spotify' : 'YouTube Music'}</small></span></button>
+          <button className="online-remove" aria-label={`移除 ${playlist.name}`} onClick={() => { const remaining = playlists.filter((item) => item.key !== playlist.key); if (selected?.key === playlist.key) { if (remaining.length) choose(remaining[0]); else setSelected(null); } save(remaining); }}>×</button>
+        </div>)}</div>
       </section>}
       <div className={styles.content}>
       <div className={styles.downloadArea} hidden={mode === 'playback'}>
-        {mode === 'download' && selected && !downloadFromDiscovery && <div className={styles.selectedPlaylist}><span className={`provider-dot ${selected.provider}`} /><div><b>{selected.name}</b><small>{selected.provider === 'spotify' ? 'Spotify 歌单' : 'YouTube Music 歌单'}</small></div><button className={styles.originalButton} onClick={() => changeMode('playback')}>原平台试听 ↗</button></div>}
-        <PlaylistDownloads playlist={selected} playlistRevision={selectionRevision} onUpload={onUpload} onRepairUpload={onRepairUpload} onGoogleLogin={onGoogleLogin} onPlayDownloaded={onPlayDownloaded} onLibraryChanged={onLibraryChanged} uploadAccount={uploadAccount} uploadEmail={uploadEmail} onPlayOriginal={() => changeMode('playback')} discoveryMode={mode === 'discover'} active={active} taste={taste} playlists={playlists} sourceRadio={sourceRadio} sourceCatalog={sourceCatalog} onShowDownloads={() => { setDownloadFromDiscovery(true); changeMode('download'); }} onShowPlaylist={() => setDownloadFromDiscovery(false)} />
+        <PlaylistDownloads playlist={selected} playlistRevision={selectionRevision} onUpload={onUpload} onRepairUpload={onRepairUpload} onGoogleLogin={onGoogleLogin} onPlayDownloaded={onPlayDownloaded} onLibraryChanged={onLibraryChanged} uploadAccount={uploadAccount} uploadEmail={uploadEmail} onPlayOriginal={() => changeMode('playback')} discoveryMode={mode === 'discover'} active={active && mode !== 'playback'} taste={taste} playlists={playlists} sourceRadio={sourceRadio} sourceCatalog={sourceCatalog} onShowDownloads={({ fromDiscovery = downloadFromDiscovery } = {}) => { setDownloadFromDiscovery(fromDiscovery); changeMode('download'); }} onShowPlaylist={() => setDownloadFromDiscovery(false)} />
       </div>
       <section className="online-player" aria-label="平台歌单播放器" hidden={mode !== 'playback'}>{mode === 'playback' && active && selected ? <>
         <header><div><h2>{selected.name}</h2><small>{selected.provider === 'spotify' ? '播放来源：Spotify 原平台' : 'YouTube Music · YouTube 播放器'}</small></div><button onClick={() => { setLoaded(false); setRetry((value) => value + 1); }}>重新加载</button></header>
@@ -95,3 +96,5 @@ export default function OnlinePlaylists({ onClose, onUpload, onRepairUpload, onG
     </div>
   </main>;
 }
+
+export default memo(OnlinePlaylists);

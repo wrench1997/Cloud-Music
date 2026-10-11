@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { NativeAudio } from '../lib/native-audio';
 import { NativeDownloads, nativeDownloadSong } from '../lib/native-downloads';
@@ -22,6 +22,7 @@ import { createGoogleDriveApi, isMusicFile, MUSIC_ACCEPT, ROOT_FOLDER, normalize
 import { locationKey, normalizeFolderPath, openVerifiedGoogleLibrary } from '../lib/google-library';
 import { createGoogleLoginRecovery, isTransientError } from '../lib/google-login-recovery';
 import { prepareGoogleSignIn, connectGoogle, getGoogleAccessToken, selectGoogleAccount, disconnectGoogle, importGoogleConfig, configureGoogle, openGoogleSetup } from '../lib/google-auth';
+import { useLiveCallback } from '../lib/use-live-callback';
 
 const icons = {
   logo: 'M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm3.5 11.4a3.2 3.2 0 1 1-1.7-2.83V6.3l4.2-.95v5.25a3.2 3.2 0 0 1-2.5 2.8Z',
@@ -41,6 +42,7 @@ const icons = {
   queue: 'M4 5h16v2H4V5Zm0 5h16v2H4v-2Zm0 5h9v2H4v-2Zm12-1 6 4-6 4v-8Z',
   refresh: 'M18.6 6.4A8 8 0 1 0 20 15h-2.1A6 6 0 1 1 17 8l-3 3h7V4l-2.4 2.4Z',
   upload: 'M11 15V7L8 10 6.6 8.6 12 3.2l5.4 5.4L16 10l-3-3v8h-2ZM4 16h2v3h12v-3h2v5H4v-5Z',
+  download: 'M11 3h2v10l3-3 1.4 1.4L12 17l-5.4-5.6L8 10l3 3ZM4 18h2v2h12v-2h2v4H4Z',
   logout: 'M10 4H4v16h6v-2H6V6h4V4Zm4.6 3.6L13.2 9l2 2H9v2h6.2l-2 2 1.4 1.4L19 12l-4.4-4.4Z',
   repeat: 'M7 7h10l-2-2 1.4-1.4L20.8 8l-4.4 4.4L15 11l2-2H7a3 3 0 0 0-3 3H2a5 5 0 0 1 5-5Zm10 10H7l2 2-1.4 1.4L3.2 16l4.4-4.4L9 13l-2 2h10a3 3 0 0 0 3-3h2a5 5 0 0 1-5 5Z',
   shuffle: 'M17 3h4v4l-1.6-1.6-5.2 5.2-1.4-1.4L18 4 17 3ZM3 5h3l12 14-1 1h4v-4l-1.6 1.6L7 3H3v2Zm0 14h4l4-4.6-1.4-1.5L6 17H3v2Z',
@@ -67,6 +69,25 @@ function formatStorage(bytes) {
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   return `${(value / 1024 ** 3).toFixed(1)} GB`;
 }
+
+const knownArtist = (song) => Boolean(song?.artist?.trim() && !/^(未知歌手|unknown(?: artist)?)$/i.test(song.artist.trim()));
+const knownAlbum = (song) => Boolean(song?.album?.trim() && !/^(未知专辑|unknown(?: album)?|Google Drive)$/i.test(song.album.trim()));
+
+const SongRow = memo(function SongRow({ song, index, playing, isPlaying, disabled, api, onPlay, onMenu, onMenuKeyDown, onCatalog }) {
+  return <div className={`track-row ${playing ? 'playing' : ''}`} onContextMenu={(event) => onMenu(event, song)} onKeyDown={(event) => onMenuKeyDown(event, song)} role="group" aria-label={song.title || '未知歌曲'}>
+    <button className="track-index" disabled={disabled} aria-label={`播放 ${song.title}`} onClick={() => onPlay(song)}>{isPlaying ? <i className="equalizer"><b /><b /><b /></i> : String(index + 1).padStart(2, '0')}</button>
+    <span className="track-title">
+      <button className="art" disabled={disabled} aria-label={`播放 ${song.title}`} onClick={() => onPlay(song)}><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></button>
+      <span><button className="track-name" disabled={disabled} onClick={() => onPlay(song)}><b>{song.title || '未知歌曲'}</b></button><small><button className="metadata-link" disabled={!knownArtist(song)} onClick={() => onCatalog(song, 'artists')} title={`查看歌手 ${song.artist}`}>{song.artist || '未知歌手'}</button></small></span>
+    </span>
+    <button className="album metadata-link" disabled={!knownAlbum(song)} onClick={() => onCatalog(song, 'albums')} title={`查看专辑 ${song.album}`}>{song.album || '未知专辑'}</button>
+    <span className="track-tail"><span className="track-duration">{formatTime(song.duration)}</span><button className="track-more" aria-label={`${song.title}的更多操作`} aria-haspopup="menu" onClick={(event) => onMenu(event, song)}>⋯</button></span>
+  </div>;
+});
+
+const SongRows = memo(function SongRows({ songs, currentId, isPlaying, ...props }) {
+  return songs.map((song, index) => <SongRow key={song.id} song={song} index={index} playing={song.id === currentId} isPlaying={song.id === currentId && isPlaying} {...props} />);
+});
 
 const stateKey = (session) => `yungan-state:google:${session.accountId}`;
 
@@ -146,6 +167,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.72);
@@ -349,11 +371,11 @@ export default function Home() {
     let source = librarySongs;
     if (activeNav === '我的收藏') source = librarySongs.filter((song) => favorites.includes(song.id));
     if (activeNav === '最近播放') source = recent.map((id) => librarySongs.find((song) => song.id === id)).filter(Boolean);
-    const normalized = query.trim().toLowerCase();
+    const normalized = deferredQuery.trim().toLowerCase();
     if (!normalized) return source;
     return source.filter((song) => [song.title, song.artist, song.album]
       .some((field) => String(field || '').toLowerCase().includes(normalized)));
-  }, [librarySongs, query, activeNav, favorites, recent]);
+  }, [librarySongs, deferredQuery, activeNav, favorites, recent]);
 
   const nativeQueue = (queue) => queue.map((song) => ({
     id: song.id,
@@ -1258,8 +1280,6 @@ export default function Home() {
     setShowOnlinePlaylists(true);
   };
   const openDiscovery = () => { setSourceRadio(null); setSourceCatalog(null); openOnlinePlaylists('discover'); };
-  const knownArtist = (song) => Boolean(song?.artist?.trim() && !/^(未知歌手|unknown(?: artist)?)$/i.test(song.artist.trim()));
-  const knownAlbum = (song) => Boolean(song?.album?.trim() && !/^(未知专辑|unknown(?: album)?|Google Drive)$/i.test(song.album.trim()));
   const openMusicCatalog = (song, kind) => {
     if (kind === 'artists' ? !knownArtist(song) : !knownAlbum(song)) return;
     setSourceRadio(null);
@@ -1326,13 +1346,25 @@ export default function Home() {
     return song;
   } : null;
   const openSettings = () => { setMenuOpen(false); setShowPlayer(false); setShowQueue(false); setShowSettings(true); };
-  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={() => openOnlinePlaylists()} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials && !isNative} />;
+  const navigation = <MobileNavigation open={menuOpen} onOpen={() => setMenuOpen(true)} onClose={closeMenu} active={showSettings ? 'settings' : showOnlinePlaylists ? onlineMode === 'discover' ? 'discover' : 'playlists' : 'library'} onLibrary={() => { setMenuOpen(false); setShowSettings(false); setShowOnlinePlaylists(false); setActiveNav('云端曲库'); }} onPlaylists={() => openOnlinePlaylists()} onDiscover={openDiscovery} onSettings={openSettings} email={credentials?.email} hasUpdate={hasUpdate} standalone={!credentials && !isNative && !isDesktop} />;
   const settingsPage = <AppSettings user={credentials} onLogin={beginGoogleLogin} onLogout={logout} onBack={() => { setShowSettings(false); setShowOnlinePlaylists(false); }} syncStatus={syncStatus} storageQuota={storageQuota} busy={busy} />;
   const changeLibrarySource = (source) => { songActionSourceRef.current = source; setLibrarySource(source); setQuery(''); setActiveNav('云端曲库'); localStorage.setItem('yungan-library-source', source); };
 
   const navItems = [
     ['云端曲库', 'folder'], ['我的收藏', 'heart'], ['最近播放', 'history'],
   ];
+
+  const onListPlay = useLiveCallback(playSong);
+  const onListMenu = useLiveCallback(openSongMenu);
+  const onListMenuKeyDown = useLiveCallback(songMenuKeyDown);
+  const onListCatalog = useLiveCallback(openMusicCatalog);
+  const closeOnline = useCallback(() => setShowOnlinePlaylists(false), []);
+  const onDownloadUpload = useLiveCallback(uploadDownloadedMp3);
+  const onDownloadRepair = useLiveCallback(repairDownloadedMp3);
+  const onDownloadLogin = useLiveCallback(beginGoogleLogin);
+  const onDownloadPlay = useLiveCallback(playDownloaded);
+  const onDownloadedLibraryChanged = useLiveCallback(reloadLocalLibrary);
+  const onlineTaste = useMemo(() => ({ songs: [...songs, ...localSongs], favorites, recent, currentSong, currentQueue: playbackQueue }), [songs, localSongs, favorites, recent, currentSong, playbackQueue]);
 
   return (
     <>{navigation}<div className={`music-app${currentSong ? ' has-player' : ''}${!credentials && !isNative && !isDesktop ? ' without-sidebar' : ''}`}>
@@ -1343,7 +1375,8 @@ export default function Home() {
           {navItems.map(([label, icon]) => (
             <button
               key={label}
-              className={activeNav === label ? 'active' : ''}
+              className={!showOnlinePlaylists && !showSettings && activeNav === label ? 'active' : ''}
+              aria-current={!showOnlinePlaylists && !showSettings && activeNav === label ? 'page' : undefined}
               onClick={() => {
                 setShowOnlinePlaylists(false); setShowSettings(false);
                 setActiveNav(label);
@@ -1353,13 +1386,13 @@ export default function Home() {
               <Icon name={icon} size={19} /> <span>{label}</span>
             </button>
           ))}
-          <button onClick={openDiscovery}><Icon name="search" size={19} /><span>发现音乐</span></button>
+          <button className={showOnlinePlaylists && !showSettings && onlineMode === 'discover' ? 'active' : ''} aria-current={showOnlinePlaylists && !showSettings && onlineMode === 'discover' ? 'page' : undefined} onClick={openDiscovery}><Icon name="search" size={19} /><span>发现音乐</span></button>
+          <button className={showOnlinePlaylists && !showSettings && onlineMode !== 'discover' ? 'active' : ''} aria-current={showOnlinePlaylists && !showSettings && onlineMode !== 'discover' ? 'page' : undefined} onClick={openOnlinePlaylists}><Icon name="download" size={19} /><span>歌单下载</span></button>
           <p>Google Drive</p>
-          <button onClick={openOnlinePlaylists}><Icon name="radio" size={19} /><span>歌单下载</span></button>
           <button disabled={!credentials || busy || Boolean(upload)} onClick={() => { setShowOnlinePlaylists(false); setShowSettings(false); setLibrarySource('cloud'); openDirectory([ROOT_FOLDER]); }}><Icon name="home" size={19} /><span>我的云盘</span></button>
           <button disabled={!credentials || busy || Boolean(upload)} onClick={() => { setShowOnlinePlaylists(false); setShowSettings(false); setLibrarySource('cloud'); openUploads(); }}><Icon name="upload" size={19} /><span>上传目录</span></button>
           <p>应用</p>
-          <button onClick={openSettings}><Icon name="settings" size={19} /><span>设置</span>{hasUpdate && <small className="sidebar-update-dot">有更新</small>}</button>
+          <button className={showSettings ? 'active' : ''} aria-current={showSettings ? 'page' : undefined} onClick={openSettings}><Icon name="settings" size={19} /><span>设置</span>{hasUpdate && <small className="sidebar-update-dot">有更新</small>}</button>
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
@@ -1370,7 +1403,7 @@ export default function Home() {
       <section className="main-view" hidden={showOnlinePlaylists || showSettings || (!credentials && !isNative && !isLocalLibrary)}>
         <header className="topbar">
           <div className="nav-arrows" hidden={isLocalLibrary || !credentials}><button aria-label="返回上级目录" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory(folderPath.slice(0, -1))}>‹</button><button aria-label="返回我的云盘" disabled={busy || Boolean(upload) || folderPath.length < 2} onClick={() => openDirectory([ROOT_FOLDER])}><Icon name="home" size={16} /></button></div>
-          <label className="search-box"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isLocalLibrary ? '搜索本机音乐' : '搜索当前目录的音乐'} /></label>
+          <label className="search-box"><Icon name="search" size={18} /><input aria-label="搜索曲库" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isLocalLibrary ? '搜索本机音乐' : '搜索当前目录的音乐'} /></label>
           <div className="top-actions">
             {isGoogle && <button title="上传音乐到 Google Drive" aria-label="上传音乐" disabled={Boolean(upload) || busy} onClick={() => uploadInputRef.current?.click()}><Icon name="upload" /></button>}
             <button title="刷新曲库" aria-label="刷新曲库" disabled={busy || Boolean(upload)} onClick={() => loadLibrary()}><Icon name="refresh" /></button>
@@ -1423,25 +1456,15 @@ export default function Home() {
             {error && <div className="inline-error" role="alert">{error}</div>}
             {loadingTrack && <div className="buffering" aria-live="polite">正在读取音频…</div>}
             <div className="track-head"><span>#</span><span>标题</span><span>专辑</span><span>时长</span></div>
-            <div className="track-list">
-              {!isLocalLibrary && busy && !songs.length ? <div className="empty">正在读取云端曲库…</div> : visibleSongs.map((song, index) => (
-                <div key={song.id} className={`track-row ${currentSong?.id === song.id ? 'playing' : ''}`} onContextMenu={(event) => openSongMenu(event, song)} onKeyDown={(event) => songMenuKeyDown(event, song)} role="group" aria-label={song.title || '未知歌曲'}>
-                  <button className="track-index" disabled={!isLocalLibrary && busy} aria-label={`播放 ${song.title}`} onClick={() => playSong(song)}>{currentSong?.id === song.id && isPlaying ? <i className="equalizer"><b /><b /><b /></i> : String(index + 1).padStart(2, '0')}</button>
-                  <span className="track-title">
-                    <button className="art" disabled={!isLocalLibrary && busy} aria-label={`播放 ${song.title}`} onClick={() => playSong(song)}><SongArtwork song={song} api={api} fallback={<Icon name="logo" size={20} />} /></button>
-                    <span><button className="track-name" disabled={!isLocalLibrary && busy} onClick={() => playSong(song)}><b>{song.title || '未知歌曲'}</b></button><small><button className="metadata-link" disabled={!knownArtist(song)} onClick={() => openMusicCatalog(song, 'artists')} title={`查看歌手 ${song.artist}`}>{song.artist || '未知歌手'}</button></small></span>
-                  </span>
-                  <button className="album metadata-link" disabled={!knownAlbum(song)} onClick={() => openMusicCatalog(song, 'albums')} title={`查看专辑 ${song.album}`}>{song.album || '未知专辑'}</button>
-                  <span className="track-tail"><span className="track-duration">{formatTime(song.duration)}</span><button className="track-more" aria-label={`${song.title}的更多操作`} aria-haspopup="menu" onClick={(event) => openSongMenu(event, song)}>⋯</button></span>
-                </div>
-              ))}
+            <div className="track-list" aria-busy={query !== deferredQuery}>
+              {!isLocalLibrary && busy && !songs.length ? <div className="empty">正在读取云端曲库…</div> : <SongRows songs={visibleSongs} currentId={currentSong?.id} isPlaying={isPlaying} disabled={!isLocalLibrary && busy} api={api} onPlay={onListPlay} onMenu={onListMenu} onMenuKeyDown={onListMenuKeyDown} onCatalog={onListCatalog} />}
               {(isLocalLibrary || !busy) && !visibleSongs.length && <div className="empty">{query ? '没有找到匹配的歌曲' : activeNav === '我的收藏' ? '收藏喜欢的歌曲，它们会出现在这里' : activeNav === '最近播放' ? '听过的歌曲会出现在这里' : isLocalLibrary ? '还没有下载音乐，去发现一首喜欢的歌吧' : !credentials ? '连接 Google，打开你的云端音乐' : folders.length ? '打开上面的文件夹，找到你的音乐' : '这个目录还没有音乐'}{activeNav === '云端曲库' && !query && (isLocalLibrary ? <button className="red-button empty-upload" onClick={openDiscovery}>发现音乐</button> : !credentials ? <button className="red-button empty-upload" onClick={beginGoogleLogin} disabled={busy}>连接 Google</button> : !folders.length && <button className="red-button empty-upload" disabled={Boolean(upload)} onClick={() => uploadInputRef.current?.click()}>上传音乐</button>)}</div>}
             </div>
           </section>
         </div>
       </section>
 
-      <div className="workspace-page" hidden={!showOnlinePlaylists || showSettings}>{error && <div className="inline-error" role="alert">{error}<button aria-label="关闭提示" onClick={() => setError('')}>×</button></div>}<OnlinePlaylists mode={onlineMode} onModeChange={setOnlineMode} active={showOnlinePlaylists && !showSettings} taste={{ songs: [...songs, ...localSongs], favorites, recent, currentSong, currentQueue: playbackQueue }} sourceRadio={sourceRadio} sourceCatalog={sourceCatalog} onClose={() => setShowOnlinePlaylists(false)} onUpload={credentials ? uploadDownloadedMp3 : undefined} onRepairUpload={repairDownloadedMp3} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={beginGoogleLogin} onPlayDownloaded={playDownloaded} /></div>
+      <div className="workspace-page" hidden={!showOnlinePlaylists || showSettings}>{error && <div className="inline-error" role="alert">{error}<button aria-label="关闭提示" onClick={() => setError('')}>×</button></div>}<OnlinePlaylists mode={onlineMode} onModeChange={setOnlineMode} active={showOnlinePlaylists && !showSettings} taste={onlineTaste} sourceRadio={sourceRadio} sourceCatalog={sourceCatalog} onClose={closeOnline} onUpload={credentials ? onDownloadUpload : undefined} onRepairUpload={credentials ? onDownloadRepair : undefined} uploadAccount={credentials?.accountId || ''} uploadEmail={credentials?.email || ''} onGoogleLogin={onDownloadLogin} onPlayDownloaded={onDownloadPlay} onLibraryChanged={onDownloadedLibraryChanged} /></div>
       <div className="workspace-page" hidden={!showSettings}>{error && <div className="inline-error" role="alert">{error}</div>}{settingsPage}</div>
       <div className="workspace-page workspace-login" hidden={Boolean(credentials) || isNative || isLocalLibrary || showOnlinePlaylists || showSettings}><Login onOnlinePlaylists={openOnlinePlaylists} onGoogleLogin={beginGoogleLogin} onImportConfig={importConfig} onConfigure={saveGoogleConfig} onOpenSetup={openSetup} onToggleSetup={() => setShowGoogleSetup((value) => !value)} loginEmail={loginEmail} onLoginEmail={setLoginEmail} showSetup={showGoogleSetup} setupMessage={setupMessage} googleReady={googleReady} googleConfigured={googleConfigured} isDesktop={isDesktop} isNative={isNative} rememberedLogin={rememberedLogin} restoringLogin={restoringLogin} busy={busy} error={error} /></div>
 

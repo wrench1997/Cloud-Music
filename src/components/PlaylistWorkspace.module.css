@@ -1,74 +1,44 @@
-.workspace {
-  align-items: start;
-}
-
-.singleColumn { grid-template-columns:minmax(0,1fr); }
-.importCard { padding:22px; margin:22px 0; border:1px solid #eee3e8; border-radius:24px; background:#fff; box-shadow:0 5px 20px #73314905; }
-.importHeading { display:flex; align-items:center; gap:12px; }
-.importHeading>span { display:grid; place-items:center; flex-shrink:0; width:44px; height:44px; border-radius:14px; color:#d84c67; background:#fff0f4; font-size:27px; }
-.importHeading h2 { margin:0; font-size:18px; }
-.importHeading p { margin:4px 0 0; color:#99858e; font-size:12px; }
-.importCard :global(.online-form) { grid-template-columns:minmax(0,1fr) auto; margin:18px 0 0; }
-.optionalName { grid-column:1/-1; color:#967e8a; font-size:12px; }
-.optionalName summary { min-height:36px; cursor:pointer; }
-.optionalName label { padding-top:7px; }
-.selectedPlaylist>div { flex:1; min-width:0; }
-.originalButton { min-height:44px; padding:9px 13px; border:1px solid #eee3e8; border-radius:14px; color:#987282; background:#fff; font-size:12px; }
-
-.content {
-  min-width: 0;
-}
-
-.downloadArea[hidden],
-.content > section[hidden] {
-  display: none;
-}
-
-.downloadArea > :global(.download-panel) {
-  margin-top: 0;
-}
-
-.selectedPlaylist {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 4px 14px;
-  overflow-wrap: anywhere;
-}
-
-.selectedPlaylist b,
-.selectedPlaylist small {
-  display: block;
-}
-
-.selectedPlaylist small {
-  margin-top: 3px;
-  color: #888;
-  font-size: 12px;
-}
-
-@media (max-width: 760px) {
-  .workspace {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
-
-  .content {
-    order: -1;
-  }
-
-  .downloadArea > :global(.download-panel) {
-    padding: 18px 16px;
-  }
-
-  .importCard { padding:18px 16px; margin-top:18px; border-radius:22px; }
-  .importCard :global(.online-form) { grid-template-columns:minmax(0,1fr); gap:12px; }
-  .importCard :global(.online-form)>button { min-height:48px; width:100%; }
-  .selectedPlaylist { gap:9px; padding:0 3px 12px; }
-  .originalButton { padding:9px 11px; font-size:12px; }
-
-  .saved {
-    max-height: 340px;
-    overflow-y: auto;
-  }
+.page { background:#faf9fa; }
+.header h1 { margin:5px 0 0; font-size:27px; font-weight:700; letter-spacing:-.5px; }
+.header :global(.eyebrow) { font-size:10px; letter-spacing:2px; }
+.header>button { min-height:44px; font-size:13px; }
+.intro { margin:9px 0 18px; font-size:13px; color:#81757c; }
+.workspace { grid-template-columns:minmax(0,1fr); align-items:start; gap:16px; }
+.importCard { margin:0 0 18px; padding:16px 18px 10px; border:1px solid #eee5e9; border-radius:18px; background:#fff; }
+.importCard :global(.online-form) { grid-template-columns:minmax(0,1fr) auto; gap:10px; margin:0; }
+.importCard :global(.online-form) input { min-height:46px; padding:12px 14px; border-color:#e9e2e5; border-radius:12px; font-size:13px; }
+.importCard :global(.online-form)>button { min-height:46px; height:auto; padding:11px 20px; font-size:13px; }
+.linkLabel { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.importMeta { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-top:7px; color:#9a8993; font-size:11px; }
+.importMeta>span { padding:9px 0; }
+.optionalName { min-width:0; }
+.optionalName summary { min-height:36px; padding:9px 0; cursor:pointer; }
+.optionalName label { display:grid; gap:5px; margin:0 0 8px; }
+.optionalName input { width:100%; min-width:0; min-height:44px; padding:10px; border:1px solid #e9e2e5; border-radius:10px; background:#fff; }
+.saved { min-width:0; }
+.saved h2 { margin:0 0 8px; font-size:13px; font-weight:600; color:#776a72; }
+.saved h2 small { margin-left:4px; color:#a3939d; font-size:11px; font-weight:400; }
+.playlistRail { display:flex; gap:8px; min-width:0; overflow-x:auto; padding:2px 1px 8px; scrollbar-width:thin; scrollbar-color:#e6dbe1 transparent; }
+.playlistRail .playlistItem { flex:0 0 auto; min-width:170px; max-width:270px; margin:0; border:1px solid #ebe3e7; border-radius:13px; background:#fff; }
+.playlistRail .playlistItem:global(.selected) { border-color:#f2b9c7; background:#fff0f3; }
+.playlistItem>button:first-child { min-height:54px; padding:9px 12px; }
+.playlistItem b { overflow:hidden; font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.playlistItem small { margin-top:2px; font-size:10px; }
+.playlistItem :global(.provider-dot) { width:8px; height:8px; flex-basis:8px; }
+.playlistItem :global(.online-remove) { min-width:36px; min-height:44px; padding:6px; font-size:20px; }
+.content { min-width:0; }
+.downloadArea[hidden],.content>section[hidden] { display:none; }
+.downloadArea>:global(.download-panel) { margin-top:0; padding:18px; border-color:#eee5e9; border-radius:18px; }
+@media(max-width:760px) {
+  .header h1 { font-size:25px; }
+  .header>button { padding:10px 13px; font-size:12px; }
+  .intro { margin-bottom:15px; }
+  .workspace { gap:12px; }
+  .importCard { padding:12px 12px 6px; margin-bottom:14px; border-radius:16px; }
+  .importCard :global(.online-form) { grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+  .importCard :global(.online-form)>button { width:auto; min-height:46px; padding:10px 12px; font-size:12px; }
+  .importCard :global(.online-form) input { font-size:12px; padding:11px 10px; }
+  .importMeta { font-size:10px; }
+  .playlistRail .playlistItem { min-width:155px; max-width:230px; }
+  .downloadArea>:global(.download-panel) { padding:14px 12px; border-radius:17px; }
 }
