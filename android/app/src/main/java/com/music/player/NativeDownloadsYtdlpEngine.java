@@ -215,6 +215,7 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
             JSONArray rows = result.optJSONArray("entries");
             java.util.concurrent.ExecutorService cards = Executors.newFixedThreadPool(4);
             List<java.util.concurrent.Future<?>> pending = new ArrayList<>();
+            NativeMusicCatalog.CatalogReader readProfile = url -> new JSONObject(execute(request(url).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download").addOption("--playlist-end", "1"), "catalog-card-" + UUID.randomUUID(), 30000, null));
             try {
                 if (rows != null) for (int i = 0; i < Math.min(rows.length(), limit); i++) {
                     final JSONObject row = rows.optJSONObject(i);
@@ -223,8 +224,11 @@ final class NativeDownloadsYtdlpEngine implements NativeDownloadEngine {
                         try {
                             JSONObject source = NativeMusicCatalog.options(new JSONObject().put("provider", "youtube").put("kind", artists ? "artist" : "album").put("url", row.optString("url")));
                             String url = artists ? source.getJSONArray("artistRequestUrls").getString(2) : source.getString("requestUrl");
-                            JSONObject details = new JSONObject(execute(request(url).addOption("--flat-playlist").addOption("--dump-single-json").addOption("--skip-download").addOption("--playlist-end", "1"), "catalog-card-" + UUID.randomUUID(), 30000, null));
-                            row.put("catalogDetails", details);
+                            if (artists) {
+                                JSONObject profile = NativeMusicCatalog.readArtistProfile(url, readProfile);
+                                row.put("catalogDetails", profile.getJSONObject("catalogDetails"));
+                                if (profile.has("catalogArtist")) row.put("catalogArtist", profile.getJSONObject("catalogArtist"));
+                            } else row.put("catalogDetails", readProfile.read(url));
                         } catch (Exception ignored) { /* Keep a retriable platform link when a card cannot be loaded. */ }
                     }));
                 }

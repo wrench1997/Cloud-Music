@@ -76,6 +76,41 @@ async function readYoutubeArtistCatalog(options, read) {
   }
 }
 
+async function readYoutubeArtistProfile(url, read) {
+  const source = catalogLink(url);
+  if (source.provider !== 'youtube' || source.kind !== 'artist') throw new Error('请使用 YouTube 歌手链接。');
+  const details = await read(source.url);
+  const result = { catalogDetails: details };
+  // Topic uploads can credit a different, official artist channel. Follow only
+  // that explicit channel ID, and replace the directory only after verification.
+  if (!isYoutubeTopic(details) || details.channel_id !== source.id) return result;
+  const track = details.entries?.[0];
+  if (!/^[\w-]{11}$/.test(track?.id || '') || !/^UC[\w-]{22}$/.test(track.channel_id || '')) return result;
+  try {
+    const artist = catalogLink(track.channel_url);
+    if (artist.provider !== 'youtube' || artist.kind !== 'artist' || artist.id === source.id || artist.id !== track.channel_id) return result;
+    const profile = await read(artist.url);
+    if (profile.channel_id === artist.id && profile.channel_is_verified === true) result.catalogArtist = { url: artist.url, details: profile };
+  } catch { /* Preserve the music directory if its linked profile is unavailable. */ }
+  return result;
+}
+
+function isYoutubeTopic(data) {
+  return / - Topic$/i.test(clean(data?.title)) || / - Topic$/i.test(clean(data?.channel));
+}
+
+function youtubeArtistCover(images = []) {
+  const avatars = images.filter((item) => {
+    try {
+      const host = new URL(item?.url).hostname;
+      return ['yt3.googleusercontent.com', 'yt3.ggpht.com', 'lh3.googleusercontent.com'].includes(host)
+        && !/^banner/.test(item.id || '') && !(item.preference < 0)
+        && (!item.width || !item.height || Math.abs(item.width / item.height - 1) < 0.25);
+    } catch { return false; }
+  }).sort((a, b) => Number(/^avatar/.test(b.id || '')) - Number(/^avatar/.test(a.id || '')) || (b.width || 0) - (a.width || 0));
+  return avatars.map((item) => catalogCover([item])).find(Boolean) || '';
+}
+
 function catalogCover(images = []) {
   return [...images].sort((a, b) => (b.width || b.maxWidth || 0) - (a.width || a.maxWidth || 0)).map((item) => {
     try {
@@ -174,11 +209,22 @@ function parseYoutubeCatalog(options, data) {
       || catalogCover(details.thumbnails || []);
     if (['artists', 'albums'].includes(options.kind)) {
       try {
-        const source = catalogLink(row.url || row.channel_url);
+        let source = catalogLink(row.url || row.channel_url);
+        let profile = details;
+        const artists = options.kind === 'artists';
+        if (artists && row.catalogArtist) {
+          const linked = catalogLink(row.catalogArtist.url);
+          if (linked.provider === 'youtube' && linked.kind === 'artist' && row.catalogArtist.details?.channel_id === linked.id && row.catalogArtist.details?.channel_is_verified === true) {
+            source = linked;
+            profile = row.catalogArtist.details;
+          }
+        }
         if (source.provider !== 'youtube' || source.kind !== (options.kind === 'artists' ? 'artist' : 'album') || seen.has(source.url)) continue;
         seen.add(source.url);
-        items.push({ ...source, title: clean(row.title || row.channel || row.uploader || (options.kind === 'artists' ? details.channel || details.uploader : '') || details.title).replace(/^Album - /, '') || (options.kind === 'artists' ? '歌手（点击查看作品）' : '专辑（点击查看曲目）'), artist: clean(row.artist || row.uploader || row.channel || details.artist || details.entries?.[0]?.artist || details.entries?.[0]?.channel),
-          coverUrl, releaseDate: releaseDate(row.release_year ? String(row.release_year) : ''), verified: Boolean(row.channel_is_verified || details.channel_is_verified) });
+        items.push({ ...source, title: clean((artists ? profile.channel || profile.uploader : '') || row.title || row.channel || row.uploader || profile.title).replace(/^Album - /, '') || (artists ? '歌手（点击查看作品）' : '专辑（点击查看曲目）'), artist: clean(row.artist || row.uploader || row.channel || profile.artist || profile.entries?.[0]?.artist || profile.entries?.[0]?.channel),
+          coverUrl: artists ? youtubeArtistCover([...(profile.thumbnails || []), ...(profile === details ? [...(row.thumbnails || []), { url: row.thumbnail }] : [])]) : coverUrl,
+          ...(artists ? { artistType: isYoutubeTopic(profile) || (profile === details && isYoutubeTopic(row)) ? 'topic' : 'channel' } : {}),
+          releaseDate: releaseDate(row.release_year ? String(row.release_year) : ''), verified: Boolean(profile.channel_is_verified || (profile === details && row.channel_is_verified)) });
       } catch { /* Ignore unsupported result types. */ }
     } else {
       if (options.kind === 'artist') {
@@ -215,13 +261,13 @@ function parseYoutubeCatalog(options, data) {
     : ['artists', 'albums', 'songs'].includes(options.kind) ? options.query : data?.title;
   return { provider: 'youtube', kind: options.kind, title: clean(title) || options.query || 'YouTube Music', url: options.url,
     coverUrl: catalogCover(data?.thumbnails || []), entries: tracks ? bounded : [], items: tracks ? [] : bounded, albums: albums.slice(0, options.limit),
-    hasMore: options.kind !== 'album' && options.page < 5 && (items.length > options.limit || albums.length > options.limit),
+    hasMore: options.kind !== 'album' && options.page < 5 && ((options.kind === 'artists' ? rows.length : items.length) > options.limit || albums.length > options.limit),
     notice: options.kind === 'new' ? 'YouTube 最近一个月的上传，按上传时间排列；上传时间不代表歌曲首发时间。'
       : options.kind === 'artist' ? albums.length || data?.catalogSource === 'releases'
         ? '来自歌手公开发行目录，保留平台顺序；点击发行封面查看曲目。'
         : /\/shorts(?:[?#]|$)/.test(data?.webpage_url || '') ? '这个频道公开的是 Shorts 短视频，可能是同名账号。要找音乐作品，请使用歌手搜索。'
           : '歌手频道公开上传，保留平台顺序；可能包含 MV、现场与旧歌重发。'
-        : options.kind === 'artists' ? '来自 YouTube Music 的音乐歌手目录，点击歌手查看发行与歌曲。'
+        : options.kind === 'artists' ? '来自 YouTube Music 音乐目录。歌手频道与 Topic 音乐目录分别标示，点击查看发行与歌曲。'
           : '来自 YouTube 歌手频道与 YouTube Music 公开音乐目录。' };
 }
 
@@ -241,4 +287,4 @@ function catalogResult(value, payload) {
   return result;
 }
 
-module.exports = { NEW_MUSIC_PLAYLIST, catalogLink, catalogOptions, catalogResult, parseSpotifyCatalog, parseYoutubeCatalog, catalogCover, readYoutubeArtistCatalog };
+module.exports = { NEW_MUSIC_PLAYLIST, catalogLink, catalogOptions, catalogResult, parseSpotifyCatalog, parseYoutubeCatalog, catalogCover, readYoutubeArtistCatalog, readYoutubeArtistProfile };

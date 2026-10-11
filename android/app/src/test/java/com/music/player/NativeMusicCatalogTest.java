@@ -69,4 +69,42 @@ public class NativeMusicCatalogTest {
             try { NativeMusicCatalog.options(new JSONObject().put("provider", "youtube").put("kind", "new").put("page", page)); fail(); } catch (Exception expected) {}
         }
     }
+    private JSONObject topicProfile() throws Exception {
+        return new JSONObject().put("channel", "Yasumu").put("channel_id", "UCfZGCfvNELLPbRptzsZ4t6w").put("title", "Uploads from Yasumu - Topic")
+            .put("entries", new JSONArray().put(new JSONObject().put("id", "Vz3-xvAQ2wg").put("channel_id", "UCuY7e4kMpba1PRN8QAeTBRg")
+                .put("channel_url", "https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg")));
+    }
+    @Test public void topicMusicSearchRestoresItsExplicitVerifiedArtistProfile() throws Exception {
+        List<String> calls = new ArrayList<>();
+        JSONObject profile = NativeMusicCatalog.readArtistProfile("https://music.youtube.com/browse/UCfZGCfvNELLPbRptzsZ4t6w", url -> {
+            calls.add(url);
+            if (url.endsWith("UCfZGCfvNELLPbRptzsZ4t6w")) return topicProfile();
+            return new JSONObject().put("channel", "Yasumu").put("channel_id", "UCuY7e4kMpba1PRN8QAeTBRg").put("channel_is_verified", true)
+                .put("thumbnails", new JSONArray().put(new JSONObject().put("url", "https://yt3.googleusercontent.com/artist-photo").put("id", "avatar_uncropped")));
+        });
+        assertEquals(2, calls.size());
+        assertEquals("https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg", calls.get(1));
+        assertEquals(calls.get(1), profile.getJSONObject("catalogArtist").getString("url"));
+        assertEquals("avatar_uncropped", profile.getJSONObject("catalogArtist").getJSONObject("details").getJSONArray("thumbnails").getJSONObject(0).getString("id"));
+        assertEquals("Uploads from Yasumu - Topic", profile.getJSONObject("catalogDetails").getString("title"));
+    }
+    @Test public void unavailableUnverifiedAndUnrelatedProfilesKeepTheMusicDirectory() throws Exception {
+        for (String variant : new String[]{"unavailable", "unverified", "mismatched", "unsafe", "ordinary", "same-channel", "mismatched-credit"}) {
+            List<String> calls = new ArrayList<>();
+            JSONObject directory = topicProfile();
+            if ("unsafe".equals(variant)) directory.getJSONArray("entries").getJSONObject(0).put("channel_url", "https://evil.test/channel/UCuY7e4kMpba1PRN8QAeTBRg");
+            if ("ordinary".equals(variant)) directory.put("title", "Uploads from Yasumu");
+            if ("same-channel".equals(variant)) directory.getJSONArray("entries").getJSONObject(0).put("channel_id", "UCfZGCfvNELLPbRptzsZ4t6w").put("channel_url", "https://www.youtube.com/channel/UCfZGCfvNELLPbRptzsZ4t6w");
+            if ("mismatched-credit".equals(variant)) directory.getJSONArray("entries").getJSONObject(0).put("channel_id", "UCsXVk37bltHxD1rDPwtNM8Q");
+            JSONObject profile = NativeMusicCatalog.readArtistProfile("https://music.youtube.com/browse/UCfZGCfvNELLPbRptzsZ4t6w", url -> {
+                calls.add(url);
+                if (calls.size() == 1) return directory;
+                if ("unavailable".equals(variant)) throw new IOException("network timeout");
+                return new JSONObject().put("channel", "Yasumu").put("channel_id", "mismatched".equals(variant) ? "UCsXVk37bltHxD1rDPwtNM8Q" : "UCuY7e4kMpba1PRN8QAeTBRg")
+                    .put("channel_is_verified", !"unverified".equals(variant));
+            });
+            assertFalse(variant, profile.has("catalogArtist"));
+            assertEquals(variant, variant.matches("unsafe|ordinary|same-channel|mismatched-credit") ? 1 : 2, calls.size());
+        }
+    }
 }
