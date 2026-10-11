@@ -36,10 +36,13 @@ function catalogOptions(value = {}) {
   if (value.url) {
     const source = catalogLink(value.url);
     if (source.provider !== value.provider || (value.kind && value.kind !== source.kind)) throw new Error('链接与所选平台或内容类型不一致。');
+    const artistRequestUrls = source.provider === 'youtube' && source.kind === 'artist'
+      ? [`${source.url}/releases`, `${source.url}/videos`, source.url] : undefined;
     return { ...source, page, limit: source.kind === 'album' ? 100 : 12,
+      ...(artistRequestUrls ? { artistRequestUrls } : {}),
       requestUrl: source.provider === 'spotify'
         ? `https://open.spotify.com/${source.kind === 'artist' ? '' : 'embed/'}${source.kind}/${source.id}`
-        : source.kind === 'artist' ? `${source.url}/videos` : source.url };
+        : artistRequestUrls?.[0] || source.url };
   }
   if (value.kind === 'new') {
     if (value.query !== undefined && (typeof value.query !== 'string' || value.query.length > 300 || !clean(value.query))) throw new Error('请输入 1 至 300 个字符的关键词。');
@@ -53,9 +56,24 @@ function catalogOptions(value = {}) {
   if (value.provider !== 'youtube' || !['artists', 'albums', 'songs'].includes(value.kind)) throw new Error('请粘贴 Spotify 分享链接，或使用 YouTube Music 搜索。');
   if (typeof value.query !== 'string' || value.query.length > 300 || !clean(value.query)) throw new Error('请输入 1 至 300 个字符的歌手或专辑名称。');
   const query = clean(value.query);
-  const url = value.kind === 'artists' ? `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=EgIQAg%3D%3D`
-    : `https://music.youtube.com/search?q=${encodeURIComponent(query)}#${value.kind}`;
+  const url = `https://music.youtube.com/search?q=${encodeURIComponent(query)}#${value.kind}`;
   return { provider: 'youtube', kind: value.kind, query, url, requestUrl: url, page, limit: 12 };
+}
+
+async function readYoutubeArtistCatalog(options, read) {
+  for (let index = 0; index < options.artistRequestUrls.length; index++) {
+    const last = index === options.artistRequestUrls.length - 1;
+    let data;
+    try { data = await read(options.artistRequestUrls[index]); }
+    catch (error) {
+      // Only a missing tab permits changing directories. Authentication and network
+      // errors must remain visible rather than being retried against other pages.
+      if (!last && /This channel does not have a (?:videos|releases) tab/i.test(error.message)) continue;
+      throw error;
+    }
+    if (!last && options.page === 1 && !data.entries?.length) continue;
+    return { ...data, catalogSource: ['releases', 'videos', 'channel'][index] };
+  }
 }
 
 function catalogCover(images = []) {
@@ -147,19 +165,35 @@ function parseSpotifyCatalog(options, html) {
 function parseYoutubeCatalog(options, data) {
   const rows = (Array.isArray(data?.entries) ? data.entries : []).filter(Boolean);
   const items = [];
+  const albums = [];
   const seen = new Set();
   for (const row of rows) {
     const details = row.catalogDetails || {};
-    const coverUrl = catalogCover([...(row.thumbnails || []), ...(details.thumbnails || []), { url: row.thumbnail }]);
+    const coverUrl = catalogCover([...(row.thumbnails || []), { url: row.thumbnail }])
+      || (options.kind === 'artists' ? '' : catalogCover(details.entries?.[0]?.thumbnails || []))
+      || catalogCover(details.thumbnails || []);
     if (['artists', 'albums'].includes(options.kind)) {
       try {
         const source = catalogLink(row.url || row.channel_url);
         if (source.provider !== 'youtube' || source.kind !== (options.kind === 'artists' ? 'artist' : 'album') || seen.has(source.url)) continue;
         seen.add(source.url);
-        items.push({ ...source, title: clean(row.title || row.channel || row.uploader || details.title).replace(/^Album - /, '') || '专辑（点击查看曲目）', artist: clean(row.artist || row.uploader || row.channel || details.artist || details.entries?.[0]?.artist || details.entries?.[0]?.channel),
-          coverUrl, releaseDate: releaseDate(row.release_year ? String(row.release_year) : ''), verified: Boolean(row.channel_is_verified) });
+        items.push({ ...source, title: clean(row.title || row.channel || row.uploader || (options.kind === 'artists' ? details.channel || details.uploader : '') || details.title).replace(/^Album - /, '') || (options.kind === 'artists' ? '歌手（点击查看作品）' : '专辑（点击查看曲目）'), artist: clean(row.artist || row.uploader || row.channel || details.artist || details.entries?.[0]?.artist || details.entries?.[0]?.channel),
+          coverUrl, releaseDate: releaseDate(row.release_year ? String(row.release_year) : ''), verified: Boolean(row.channel_is_verified || details.channel_is_verified) });
       } catch { /* Ignore unsupported result types. */ }
     } else {
+      if (options.kind === 'artist') {
+        try {
+          const source = catalogLink(row.url);
+          if (source.provider === 'youtube' && source.kind === 'album') {
+            if (seen.has(source.url)) continue;
+            seen.add(source.url);
+            albums.push({ ...source, title: clean(row.title || details.title).replace(/^Album - /, '') || '发行（点击查看曲目）',
+              artist: clean(data.channel || data.uploader), coverUrl,
+              releaseDate: releaseDate(row.release_year ? String(row.release_year) : ''), releaseType: '发行' });
+            continue;
+          }
+        } catch { /* A channel may return individual uploads instead of releases. */ }
+      }
       if (!/^[\w-]{11}$/.test(row.id || '') || seen.has(row.id)) continue;
       seen.add(row.id);
       const artist = clean(row.artist) || (row.artists || []).map((item) => clean(item)).filter(Boolean).join(', ') || clean(row.channel || row.uploader || data.channel || data.uploader);
@@ -177,11 +211,18 @@ function parseYoutubeCatalog(options, data) {
   }
   const tracks = !['artists', 'albums'].includes(options.kind);
   const bounded = items.slice(0, options.limit);
-  return { provider: 'youtube', kind: options.kind, title: clean(options.kind === 'artist' ? data?.channel || data?.uploader || data?.title : data?.title) || options.query || 'YouTube Music', url: options.url,
-    coverUrl: catalogCover(data?.thumbnails || []), entries: tracks ? bounded : [], items: tracks ? [] : bounded, albums: [],
-    hasMore: options.kind !== 'album' && options.page < 5 && items.length > options.limit,
+  const title = options.kind === 'artist' ? data?.channel || data?.uploader || data?.title
+    : ['artists', 'albums', 'songs'].includes(options.kind) ? options.query : data?.title;
+  return { provider: 'youtube', kind: options.kind, title: clean(title) || options.query || 'YouTube Music', url: options.url,
+    coverUrl: catalogCover(data?.thumbnails || []), entries: tracks ? bounded : [], items: tracks ? [] : bounded, albums: albums.slice(0, options.limit),
+    hasMore: options.kind !== 'album' && options.page < 5 && (items.length > options.limit || albums.length > options.limit),
     notice: options.kind === 'new' ? 'YouTube 最近一个月的上传，按上传时间排列；上传时间不代表歌曲首发时间。'
-      : options.kind === 'artist' ? '歌手频道最新上传，保留平台顺序；可能包含 MV、现场与旧歌重发。' : '来自 YouTube 歌手频道与 YouTube Music 公开音乐目录。' };
+      : options.kind === 'artist' ? albums.length || data?.catalogSource === 'releases'
+        ? '来自歌手公开发行目录，保留平台顺序；点击发行封面查看曲目。'
+        : /\/shorts(?:[?#]|$)/.test(data?.webpage_url || '') ? '这个频道公开的是 Shorts 短视频，可能是同名账号。要找音乐作品，请使用歌手搜索。'
+          : '歌手频道公开上传，保留平台顺序；可能包含 MV、现场与旧歌重发。'
+        : options.kind === 'artists' ? '来自 YouTube Music 的音乐歌手目录，点击歌手查看发行与歌曲。'
+          : '来自 YouTube 歌手频道与 YouTube Music 公开音乐目录。' };
 }
 
 function catalogResult(value, payload) {
@@ -200,4 +241,4 @@ function catalogResult(value, payload) {
   return result;
 }
 
-module.exports = { NEW_MUSIC_PLAYLIST, catalogLink, catalogOptions, catalogResult, parseSpotifyCatalog, parseYoutubeCatalog, catalogCover };
+module.exports = { NEW_MUSIC_PLAYLIST, catalogLink, catalogOptions, catalogResult, parseSpotifyCatalog, parseYoutubeCatalog, catalogCover, readYoutubeArtistCatalog };

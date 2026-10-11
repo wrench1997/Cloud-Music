@@ -1,6 +1,7 @@
 package com.music.player;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -15,6 +16,7 @@ final class NativeMusicCatalog {
         if (!"spotify".equals(provider) && !"youtube".equals(provider)) throw new IOException("请选择 Spotify 或 YouTube Music。");
         int page = NativeDownloadPolicy.integer(value, "page", 1, 5), limit = 12;
         String requestUrl;
+        JSONArray artistRequestUrls = null;
         if (value.has("url")) {
             URI url = new URI(value.getString("url"));
             if (!"https".equals(url.getScheme()) || url.getUserInfo() != null || url.getPort() != -1) throw new IOException("请使用官方 HTTPS 分享链接。");
@@ -33,7 +35,9 @@ final class NativeMusicCatalog {
                 if (artist.matches() || handle.matches()) {
                     if (!kind.isEmpty() && !"artist".equals(kind)) throw new IOException("链接与内容类型不一致。");
                     kind = "artist";
-                    requestUrl = "https://www.youtube.com/" + (artist.matches() ? "channel/" + artist.group(1) : handle.group(1)) + "/videos";
+                    String artistUrl = "https://www.youtube.com/" + (artist.matches() ? "channel/" + artist.group(1) : "@" + encode(handle.group(1).substring(1)));
+                    requestUrl = artistUrl + "/releases";
+                    artistRequestUrls = new JSONArray().put(requestUrl).put(artistUrl + "/videos").put(artistUrl);
                 } else if (album.matches()) {
                     if (!kind.isEmpty() && !"album".equals(kind)) throw new IOException("链接与内容类型不一致。");
                     kind = "album"; requestUrl = "https://music.youtube.com/browse/" + album.group(1);
@@ -50,10 +54,30 @@ final class NativeMusicCatalog {
                 : "https://www.youtube.com/results?search_query=" + encode(query) + "&sp=CAISBAgDEAE%3D";
         } else {
             if (!"youtube".equals(provider) || (!"artists".equals(kind) && !"albums".equals(kind) && !"songs".equals(kind))) throw new IOException("请粘贴 Spotify 分享链接，或使用 YouTube Music 搜索。");
-            requestUrl = "artists".equals(kind) ? "https://www.youtube.com/results?search_query=" + encode(query(value)) + "&sp=EgIQAg%3D%3D"
-                : "https://music.youtube.com/search?q=" + encode(query(value)) + "#" + kind;
+            requestUrl = "https://music.youtube.com/search?q=" + encode(query(value)) + "#" + kind;
         }
-        return new JSONObject().put("provider", provider).put("kind", kind).put("requestUrl", requestUrl).put("page", page).put("limit", limit);
+        JSONObject options = new JSONObject().put("provider", provider).put("kind", kind).put("requestUrl", requestUrl).put("page", page).put("limit", limit);
+        if (artistRequestUrls != null) options.put("artistRequestUrls", artistRequestUrls);
+        return options;
+    }
+    interface CatalogReader { JSONObject read(String url) throws Exception; }
+    static JSONObject readArtistCatalog(JSONObject options, CatalogReader reader) throws Exception {
+        JSONArray urls = options.getJSONArray("artistRequestUrls");
+        String[] sources = {"releases", "videos", "channel"};
+        for (int index = 0; index < urls.length(); index++) {
+            boolean last = index == urls.length() - 1;
+            JSONObject data;
+            try { data = reader.read(urls.getString(index)); }
+            catch (Exception error) {
+                String message = error.getMessage();
+                if (!last && message != null && Pattern.compile("This channel does not have a (?:videos|releases) tab", Pattern.CASE_INSENSITIVE).matcher(message).find()) continue;
+                throw error;
+            }
+            JSONArray entries = data.optJSONArray("entries");
+            if (!last && options.getInt("page") == 1 && (entries == null || entries.length() == 0)) continue;
+            return data.put("catalogSource", sources[index]);
+        }
+        throw new IOException("暂未读取到歌手的公开目录，请重试。");
     }
     private static String query(JSONObject value) throws Exception {
         if (!(value.opt("query") instanceof String) || value.getString("query").length() > 300) throw new IOException("请输入 1 至 300 个字符的歌手或专辑名称。");

@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const os = require('node:os');
 const { normalizeTrack, enrichSpotifyTrack, metadataFor, matchPlaylistTrack, videoId, safeCoverUrl, writeMp3Metadata } = require('./download-metadata');
 const { prepareFailedDownloadRetry, canonicalYoutubeSource, completedSourceUrls, downloadFailureReason } = require('../src/lib/download-failure-policy');
-const { catalogOptions, catalogResult } = require('../src/lib/music-catalog');
+const { catalogOptions, catalogResult, readYoutubeArtistCatalog } = require('../src/lib/music-catalog');
 
 function searchOptions(value = {}) {
   if (typeof value.query !== 'string' || value.query.length > 300) throw new Error('请输入 1 至 300 个字符的歌曲或歌手名称。');
@@ -219,16 +219,18 @@ function createDownloadService({ toolsDir, outputDir, spawnProcess = spawn, meta
       }
       const start = options.kind === 'album' ? 1 : (options.page - 1) * options.limit + 1;
       const end = options.kind === 'album' ? 100 : options.page * options.limit + 1;
-      const data = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--extractor-args', 'youtubetab:approximate_date', '--playlist-start', String(start), '--playlist-end', String(end), '--', options.requestUrl]));
-      if (options.kind === 'albums') {
+      const read = async (url) => JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--extractor-args', 'youtubetab:approximate_date', '--playlist-start', String(start), '--playlist-end', String(end), '--', url]));
+      const data = options.kind === 'artist' ? await readYoutubeArtistCatalog(options, read) : await read(options.requestUrl);
+      if (['artists', 'albums'].includes(options.kind) || (options.kind === 'artist' && data.catalogSource === 'releases')) {
         const rows = (data.entries || []).slice(0, options.limit + 1);
-        // Music album search returns navigation URLs only. Read one track per card,
-        // in batches of four, to obtain the real album name without crawling albums.
+        // Music search and release tabs return navigation URLs without artwork or
+        // names. Read at most one entry per card, in batches of four.
         for (let index = 0; index < Math.min(rows.length, options.limit); index += 4) {
           await Promise.all(rows.slice(index, Math.min(index + 4, options.limit)).map(async (row) => {
             try {
-              const album = catalogOptions({ provider: 'youtube', kind: 'album', url: row.url });
-              row.catalogDetails = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '1', '--', album.requestUrl], undefined, 30000));
+              const source = catalogOptions({ provider: 'youtube', kind: options.kind === 'artists' ? 'artist' : 'album', url: row.url });
+              const url = options.kind === 'artists' ? source.url : source.requestUrl;
+              row.catalogDetails = JSON.parse(await run(['--flat-playlist', '--dump-single-json', '--skip-download', '--playlist-end', '1', '--', url], undefined, 30000));
             } catch { /* The card still opens its validated platform link for retry. */ }
           }));
         }

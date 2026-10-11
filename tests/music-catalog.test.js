@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { catalogLink, catalogOptions, catalogResult, NEW_MUSIC_PLAYLIST } = require('../src/lib/music-catalog');
+const { catalogLink, catalogOptions, catalogResult, NEW_MUSIC_PLAYLIST, readYoutubeArtistCatalog } = require('../src/lib/music-catalog');
 const { nativeDownloadRequest } = require('../src/lib/native-download-request');
 const { createDownloadService } = require('../electron/download-service');
 
@@ -29,11 +29,81 @@ test('catalog links canonicalize real artists and albums while rejecting arbitra
 });
 
 test('catalog search selects music artists and albums, and new uploads use a bounded date-sorted search URL', () => {
-  assert.equal(catalogOptions({ provider: 'youtube', kind: 'artists', query: '周杰伦 & friends' }).requestUrl, 'https://www.youtube.com/results?search_query=%E5%91%A8%E6%9D%B0%E4%BC%A6%20%26%20friends&sp=EgIQAg%3D%3D');
+  assert.equal(catalogOptions({ provider: 'youtube', kind: 'artists', query: '周杰伦 & friends' }).requestUrl, 'https://music.youtube.com/search?q=%E5%91%A8%E6%9D%B0%E4%BC%A6%20%26%20friends#artists');
   assert.equal(catalogOptions({ provider: 'youtube', kind: 'new' }).requestUrl, 'https://www.youtube.com/results?search_query=new%20music%20official%20audio&sp=CAISBAgDEAE%3D');
   assert.equal(catalogOptions({ provider: 'spotify', kind: 'new' }).requestUrl, `https://open.spotify.com/embed/playlist/${NEW_MUSIC_PLAYLIST}`);
   assert.equal(catalogOptions({ provider: 'spotify', kind: 'album', url: `https://open.spotify.com/album/${albumId}` }).limit, 100);
   for (const input of [{ provider: 'other', kind: 'new' }, { provider: 'spotify', kind: 'artists', query: 'Kesha' }, { provider: 'youtube', kind: 'albums', query: '' }, { provider: 'youtube', kind: 'new', query: 'a'.repeat(301) }, { provider: 'youtube', kind: 'new', page: 6 }, { provider: 'youtube', kind: 'new', page: '2' }, { provider: 'youtube', kind: 'artist', url: `https://open.spotify.com/artist/${artistId}` }]) assert.throws(() => catalogOptions(input));
+});
+
+test('YouTube artist links prefer releases and retain bounded, validated fallback directories', () => {
+  const options = catalogOptions({ provider: 'youtube', kind: 'artist', url: 'https://music.youtube.com/browse/UCuY7e4kMpba1PRN8QAeTBRg' });
+  assert.deepEqual(options.artistRequestUrls, [
+    'https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg/releases',
+    'https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg/videos',
+    'https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg',
+  ]);
+  assert.equal(options.requestUrl, options.artistRequestUrls[0]);
+});
+
+test('release-only artists retain navigable albums instead of discarding non-video IDs', () => {
+  const rows = Array.from({ length: 13 }, (_, index) => ({ title: index ? `发行 ${index}` : 'Pastel Mountains', url: `https://www.youtube.com/playlist?list=OLAK5uy_release${index}`, catalogDetails: { thumbnails: [{ url: 'https://i9.ytimg.com/album.jpg', width: 640 }] } }));
+  const result = catalogResult({ provider: 'youtube', kind: 'artist', url: 'https://www.youtube.com/channel/UCuY7e4kMpba1PRN8QAeTBRg' }, { data: {
+    channel: 'Yasumu', catalogSource: 'releases', entries: [rows[0], { url: 'https://evil.test/playlist?list=private' }, ...rows],
+  } });
+  assert.equal(result.title, 'Yasumu');
+  assert.equal(result.entries.length, 0);
+  assert.equal(result.albums.length, 12);
+  assert.equal(result.albums[0].title, 'Pastel Mountains');
+  assert.equal(result.albums[0].kind, 'album');
+  assert.equal(result.albums[0].artist, 'Yasumu');
+  assert.equal(result.albums[0].coverUrl, 'https://i9.ytimg.com/album.jpg');
+  assert.equal(result.hasMore, true);
+  assert.match(result.notice, /发行目录/);
+  const artwork = catalogResult({ provider: 'youtube', kind: 'artist', url: `https://www.youtube.com/channel/${channelId}` }, { data: { channel: 'Yasumu', entries: [{
+    title: 'Pastel Mountains', url: rows[0].url, catalogDetails: { thumbnails: [{ url: 'https://i9.ytimg.com/playlist-placeholder.jpg', width: 1200 }], entries: [{ thumbnails: [{ url: 'https://i.ytimg.com/vi/XzT6DMdNGc4/hqdefault.jpg', width: 336 }] }] },
+  }] } });
+  assert.equal(artwork.albums[0].coverUrl, 'https://i.ytimg.com/vi/XzT6DMdNGc4/hqdefault.jpg');
+});
+
+test('missing artist tabs fall back to Topic uploads while authentication and network failures remain visible', async () => {
+  const options = catalogOptions({ provider: 'youtube', kind: 'artist', url: `https://www.youtube.com/channel/${channelId}` });
+  const calls = [];
+  const data = await readYoutubeArtistCatalog(options, async (url) => {
+    calls.push(url);
+    if (url.endsWith('/releases')) throw new Error('ERROR: [youtube:tab] This channel does not have a releases tab');
+    if (url.endsWith('/videos')) throw new Error('ERROR: [youtube:tab] This channel does not have a videos tab');
+    return { channel: 'Yasumu', entries: [{ id: 'Vz3-xvAQ2wg', title: 'Morning Jam' }] };
+  });
+  assert.deepEqual(calls, options.artistRequestUrls);
+  assert.equal(data.catalogSource, 'channel');
+  assert.equal(catalogResult(options, { data }).entries[0].title, 'Morning Jam');
+  for (const message of ['Sign in to confirm you are not a bot', 'HTTP Error 429: Too Many Requests', 'network timeout']) {
+    let attempts = 0;
+    await assert.rejects(readYoutubeArtistCatalog(options, async () => { attempts++; throw new Error(message); }), { message });
+    assert.equal(attempts, 1);
+  }
+});
+
+test('an empty first tab may fall back but an exhausted release page does not change catalog types', async () => {
+  const input = { provider: 'youtube', kind: 'artist', url: `https://www.youtube.com/channel/${channelId}` };
+  const first = await readYoutubeArtistCatalog(catalogOptions(input), async (url) => ({ entries: url.endsWith('/releases') ? [] : [{ id: 'abcdefghijk' }] }));
+  assert.equal(first.catalogSource, 'videos');
+  let calls = 0;
+  const next = await readYoutubeArtistCatalog(catalogOptions({ ...input, page: 2 }), async () => { calls++; return { entries: [] }; });
+  assert.equal(calls, 1);
+  assert.equal(next.catalogSource, 'releases');
+});
+
+test('music artist navigation results use fetched artist identities and identify same-name Shorts channels', () => {
+  const result = catalogResult({ provider: 'youtube', kind: 'artists', query: 'Yasumu' }, { data: { entries: [{
+    url: `https://music.youtube.com/browse/${channelId}`, catalogDetails: { channel: 'Yasumu', title: 'Uploads from Yasumu - Topic', channel_is_verified: true, thumbnails: [{ url: 'https://yt3.googleusercontent.com/artist', width: 300 }] },
+  }] } });
+  assert.equal(result.items[0].title, 'Yasumu');
+  assert.equal(result.items[0].coverUrl, 'https://yt3.googleusercontent.com/artist');
+  assert.equal(result.items[0].verified, true);
+  const shorts = catalogResult({ provider: 'youtube', kind: 'artist', url: `https://www.youtube.com/channel/${channelId}` }, { data: { channel: 'Yasumu', webpage_url: `https://www.youtube.com/channel/${channelId}/shorts`, entries: [{ id: 'abcdefghijk', title: '#kpop' }] } });
+  assert.match(shorts.notice, /Shorts.*同名/);
 });
 
 test('Spotify new music keeps editorial order across pages rather than ranking artists already in the device library', () => {
@@ -147,21 +217,22 @@ test('authenticated Windows catalog uses bounded no-download music search, cache
     const result = await (await fetch(`${config.url}/catalog`, { method: 'POST', headers, body: JSON.stringify(input) })).json();
     assert.equal(result.items[0].kind, 'artist');
     await service.catalog(input);
-    assert.equal(commands.length, 1);
+    assert.equal(commands.length, 2);
     const albums = await service.catalog({ provider: 'youtube', kind: 'albums', query: '专辑' });
     assert.equal(albums.items[0].title, '实际专辑名称');
     assert.equal(albums.items[0].artist, '真实歌手');
     assert.equal(albums.items[0].coverUrl, 'https://i9.ytimg.com/album.jpg');
-    assert.equal(commands.length, 3);
-    assert.equal(commands[2].args[commands[2].args.indexOf('--playlist-end') + 1], '1');
+    assert.equal(commands.length, 4);
+    assert.equal(commands[1].args[commands[1].args.indexOf('--playlist-end') + 1], '1');
+    assert.equal(commands[3].args[commands[3].args.indexOf('--playlist-end') + 1], '1');
     const command = commands[0];
     assert.equal(command.options.shell, false);
     assert.ok(command.args.includes('--skip-download'));
     assert.equal(command.args[command.args.indexOf('--playlist-start') + 1], '13');
     assert.equal(command.args[command.args.indexOf('--playlist-end') + 1], '25');
-    assert.ok(command.args.at(-1).endsWith('sp=EgIQAg%3D%3D'));
+    assert.ok(command.args.at(-1).endsWith('#artists'));
     assert.equal((await fetch(`${config.url}/catalog`, { method: 'POST', headers, body: JSON.stringify({ provider: 'youtube', kind: 'artist', url: 'https://evil.test/channel/private' }) })).status, 400);
-    assert.equal(commands.length, 3);
+    assert.equal(commands.length, 4);
   } finally { service.dispose(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
