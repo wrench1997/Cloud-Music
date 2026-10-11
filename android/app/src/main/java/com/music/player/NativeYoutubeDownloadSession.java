@@ -70,13 +70,19 @@ final class NativeYoutubeDownloadSession {
     synchronized JSONObject configure(String text, String source) throws Exception {
         String normalized = NativeYoutubeCookies.normalize(text, System.currentTimeMillis()); initialize();
         JSONObject next = new JSONObject().put("text", normalized).put("source", source)
-            .put("revision", saved != null && normalized.equals(saved.optString("text")) ? saved.getString("revision") : UUID.randomUUID().toString());
+            .put("revision", nextRevision(saved, normalized, source));
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         byte[] encoded = cipher.doFinal(next.toString().getBytes(StandardCharsets.UTF_8));
         File temporary = new File(credentials.getParentFile(), "youtube-download-account.bin.tmp");
         try (FileOutputStream output = new FileOutputStream(temporary)) { output.write(1); output.write(cipher.getIV()); output.write(encoded); output.getFD().sync(); }
         if (!temporary.renameTo(credentials)) { temporary.delete(); throw new IOException("无法保存 YouTube 下载登录。"); }
         saved = next; return status();
+    }
+    static String nextRevision(JSONObject previous, String normalized, String source) {
+        // Explicitly completing the account page permits one manual retry after server-side verification,
+        // which may succeed without changing cookie bytes. Re-importing unchanged files does not.
+        if (!"webview".equals(source) && previous != null && normalized.equals(previous.optString("text"))) return previous.optString("revision");
+        return UUID.randomUUID().toString();
     }
     synchronized File lease() throws Exception {
         if (!status().optBoolean("configured")) return null;
