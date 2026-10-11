@@ -15,6 +15,7 @@
 .failure .selection { color: #b53643; }
 .youtubeLogin { padding: 16px; margin: 16px 0; border: 1px solid var(--line, #e7e7e7); border-radius: 16px; background: var(--panel, #fff); scroll-margin-top: 90px; }
 .youtubeLogin summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.youtubeLogin button { min-height: 44px; }
 .youtubeLogin summary span { margin-left: 12px; font-size: 12px; color: var(--muted, #747474); font-weight: 400; }
 .youtubeLogin p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .youtubeLogin a { color: var(--red, #ef4444); }
